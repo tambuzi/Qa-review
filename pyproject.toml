@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qa-review"
+version = "0.1.0"
+description = "QA + code review in one step, as an MCP server and CLI. Works alone; uses graphskill and agenticOS when they are available."
+requires-python = ">=3.10"
+dependencies = ["mcp>=1.2,<2", "pyyaml>=6"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+qa-review = "qa_review.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["qa_review*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
