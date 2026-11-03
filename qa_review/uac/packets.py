@@ -10,14 +10,14 @@ from ..impact import analyse
 from ..review import _bounded_diff
 from . import gherkin, scaffold, sources, store
 
-_LANG = {"es": "español", "en": "English"}
+_LANG = {"en": "English", "es": "Spanish"}
 
 DRAFT_RULES = """\
 ## How to write them
 
 Write ONE Gherkin file (one `Feature`, one `Scenario` per acceptance criterion) and save it with
-`uac_save(slug="{slug}", gherkin=...)`. Write the scenarios in {language}; Gherkin keywords may stay
-in English (Given/When/Then) or use `# language: es` (Dado/Cuando/Entonces).
+`uac_save(slug="{slug}", gherkin=...)`. Write the scenarios in {language}. Gherkin keywords stay in
+English (Given/When/Then) unless the file starts with `# language: es` (Dado/Cuando/Entonces).
 
 Tag the `Feature` with `@task:{ref}` so the report can trace it back to the task.
 
@@ -40,21 +40,21 @@ Rules:
 Example:
 ```gherkin
 @task:PROJ-123
-Feature: Descuento en el carrito
-  Como cliente quiero aplicar un descuento para pagar menos.
+Feature: Cart discount
+  As a customer I want to apply a discount so that I pay less.
 
   @UAC-1 @api @source:task @ref:PROJ-123
-  Scenario: El descuento se resta del total
-    Given un carrito con productos por 50.00 €
-    When aplico un descuento de 5.00 € con POST /cart/discount
-    Then la respuesta es 200
-    And el total del carrito es 45.00 €
+  Scenario: The discount is subtracted from the total
+    Given a cart with products worth 50.00 €
+    When I apply a 5.00 € discount with POST /cart/discount
+    Then the response is 200
+    And the cart total is 45.00 €
 
   @UAC-2 @api @source:code
-  Scenario: Un descuento mayor que el total deja el total en 0
-    Given un carrito con productos por 10.00 €
-    When aplico un descuento de 15.00 €
-    Then el total del carrito es 0.00 €
+  Scenario: A discount larger than the total leaves the total at 0
+    Given a cart with products worth 10.00 €
+    When I apply a 15.00 € discount
+    Then the cart total is 0.00 €
 ```
 """
 
@@ -107,7 +107,7 @@ TESTS_RULES = """\
 ## How to write the tests
 
 Write `{spec_file}` with Playwright Test (TypeScript). One or more tests per UAC; every test title starts
-with the UAC id in brackets, e.g. `test('[UAC-1] el descuento se resta del total', ...)`. A UAC with no test
+with the UAC id in brackets, e.g. `test('[UAC-1] the discount is subtracted from the total', ...)`. A UAC with no test
 is reported as NOT COVERED.
 
 - `@e2e` UACs: use `page` and relative URLs (`page.goto('/cart')`): the base URL is the host of the run.
@@ -116,7 +116,7 @@ is reported as NOT COVERED.
   - `await shot(page, 'Then: total = 45 €')` after each Then that is visible on screen;
   - `await apiCall(request, 'POST', '/api/cart/discount', {{ amount: 5 }})` instead of calling `request`
     directly: it records request and response in the report and returns the response.
-  - `await note('texto')` for anything else worth showing (ids created, values read).
+  - `await note('text')` for anything else worth showing (ids created, values read).
 - Assert exactly what each Then says (status, body fields, visible texts). No assertion, no evidence.
 - Each test must be independent: create the data it needs (API calls, fixtures); do not rely on order.
   If the app under test keeps shared state, add `test.describe.configure({{ mode: 'default' }})` so tests run

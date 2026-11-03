@@ -34,7 +34,7 @@ CONFIG_TEMPLATE = """\
 #   tests_dir: tests/uac            # Playwright tests, one spec per task
 #   report: [pdf, html]             # pdf, html or both
 #   output_dir: .qa-review/uac      # runs, evidence and reports
-#   language: es                    # language of the UACs and the report (es | en)
+#   language: en                    # language of the UACs and the report (en | es)
 """
 
 SKILL = """\

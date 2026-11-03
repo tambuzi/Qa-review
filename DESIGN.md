@@ -1,52 +1,65 @@
-# qa-review — diseño inicial
+# qa-review — design
 
-Herramienta de QA + code review en un solo paso, para Claude Code y Kiro.
-No duplica lo que ya existe: se apoya en **agenticOS** (orquestación, revisión, lecciones)
-y **graphskill** (grafo de código).
+QA + code review in one step, for Claude Code and Kiro, as an MCP server and a CLI.
+It does not duplicate what already exists: it can lean on **agenticOS** (orchestration, review, lessons)
+and **graphskill** (code graph), but it works without either of them.
 
-## Qué reutilizamos
+## What it reuses (when available)
 
-| Pieza | Viene de | Para qué |
+| Piece | Comes from | What for |
 |---|---|---|
-| Reglas de seguridad por diff | `agenticOS/aos/review_focus.py` | Decidir si un cambio necesita checklist de seguridad (sin IA) |
-| Verificación de claims | `agenticOS/aos/verify.py` | Comprobar commits + `verify_command` |
-| Reviewer independiente, 2º review, reglas por tipo (fix/refactor) | board de agenticOS | Revisión con sesión limpia |
-| Lecciones | `aos lessons` | Convertir fallos de QA/review en reglas que se aprenden |
-| Callers/callees, repo_map | graphskill (MCP / `aos code_query`) | Radio de impacto de un cambio |
+| Call graph, symbol ranges | graphskill (its MCP server, short stdio session) | Blast radius of a change |
+| Lessons and team rules | agenticOS (`~/.agenticos`, read-only) | Review checklist grounded in what the team learned |
+| Board tasks, briefs, contracts | agenticOS (`board.db`, read-only) | A source for acceptance criteria |
+| Board workers | agenticOS (`verify_command`) | Workers must pass qa-review before `task_complete` |
 
-## Qué añade qa-review
+The fixed security rules are inspired by agenticOS's `review_focus.py` but re-implemented, so qa-review has no
+dependency on it.
 
-1. **Funciona sobre cualquier diff**, no solo tareas del board (`qa-review run --base main`).
-2. **Análisis de impacto con graphskill**: símbolos cambiados → callers → qué tests,
-   endpoints y flujos e2e hay que ejecutar.
-3. **Capa QA**: Playwright (UI + API vía `request`) y Schemathesis (fuzzing contra OpenAPI).
-4. **Informe unificado** (JSON + Markdown): veredicto pass / warn / block y hallazgos por severidad.
+## What qa-review adds
 
-## Pipeline
+1. **Works on any diff**, not only board tasks (`qa-review run --base main`).
+2. **Impact analysis**: changed symbols → callers → which tests, endpoints and e2e flows to run.
+3. **Functional QA**: Playwright (UI + API) and Schemathesis (fuzzing against OpenAPI).
+4. **One report** (JSON + Markdown): pass / warn / block verdict and findings by severity.
+5. **Host targeting** (`--host`): point the tests at local, docker or staging; production is protected.
+6. **Acceptance criteria (UAC)**: from the task (Kiro spec, agenticOS board, Jira/Linear) completed by the code,
+   kept as Gherkin, turned into Playwright tests, run against a host, and reported in PDF/HTML with evidence per
+   UAC.
+
+## Pipelines
 
 ```
-diff ─► checks deterministas (lint, types, tests, review_focus)
-     ─► impacto (graphskill: callers de lo cambiado)
-     ─► QA dirigida (tests afectados, Playwright, Schemathesis)
-     ─► review IA independiente (con contexto del grafo)
-     ─► informe + lecciones (agenticOS)
+QA + review:
+diff ─► fixed checks (lint, types, tests, security rules)
+     ─► impact (graphskill or heuristics: callers of what changed)
+     ─► targeted QA (related tests, Playwright, Schemathesis) against --host
+     ─► independent AI review (review packet → host agent → qa_submit_review)
+     ─► report (+ agenticOS lessons in the packet)
+
+UAC:
+task + code ─► uac_draft_packet ─► Gherkin (uac_save, validated)
+            ─► uac_tests_packet ─► Playwright tests with evidence helpers
+            ─► uac_run (host) ─► per-UAC results + evidence ─► PDF / HTML report
 ```
 
-## Integración
+## Decisions
 
-- Servidor MCP propio (`qa_review_run`, `qa_impact`, `qa_report`) → usable desde Claude Code y Kiro.
-- Skill `qa-review` en `skills/` de agenticOS para que los workers lo usen como `verify_command` ampliado.
-- CI: `qa-review run --ci` en GitHub Actions.
+- **Standalone MCP** (2026-11-03): qa-review is its own package and MCP server. It works without graphskill or
+  agenticOS; it detects them at run time and uses them when present.
+- **qa-review never calls a model.** The host agent does the review (`qa_review_packet` → `qa_submit_review`)
+  and writes UACs and tests from packets. Behaviour is the same in Claude Code, Kiro and CI.
+- **The verdict comes from fixed rules**, so it is predictable. Regex security flags only warn; the reviewer
+  confirms or clears them. Secrets always block.
+- **agenticOS integration is read-only** (lessons, AGENTS.md, board tasks) plus `verify_command`. qa-review does
+  not write lessons: agenticOS's learner validates those.
+- **Hosts are validated** (http(s) only, no shell characters) and **protected hosts** need an explicit
+  `allow_protected`; the agent is told never to set it on its own.
+- **UACs live with the code** (`qa/uac/<slug>.feature`); runs and reports live in `.qa-review/` (git-ignored).
+- **The report is one self-contained HTML**, printed to PDF with Playwright's Chromium or an installed Chrome.
+  If no browser can print it, the HTML is still delivered with the reason. Output format is configurable.
+- **English by default**; Spanish supported for Gherkin keywords and the UAC report (`uac.language: es`).
 
-## Decisiones
+## Next
 
-- **MCP independiente** (2026-11-03): qa-review es su propio paquete y servidor MCP. Funciona sin
-  graphskill ni agenticOS; los detecta en tiempo de ejecución y los usa si están (ver README).
-- qa-review **no llama a ningún modelo**: la review la hace el agente anfitrión con `qa_review_packet`
-  y la devuelve con `qa_submit_review`. Así es igual en Claude Code, Kiro y CI.
-- Integración con agenticOS **de solo lectura** (lecciones + AGENTS.md) más `verify_command`;
-  qa-review no escribe lecciones (eso lo valida el learner de agenticOS).
-
-## Siguiente
-
-- Piloto en un proyecto real (Knowledge-Graph tiene PHPUnit, PHPStan y un swagger.yml).
+- Pilot on a real project (Knowledge-Graph has PHPUnit, PHPStan, a `swagger.yml` and docker-compose).

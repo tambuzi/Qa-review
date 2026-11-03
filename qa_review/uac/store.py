@@ -22,7 +22,7 @@ class UacSettings:
     playwright_config: str = "playwright.uac.config.ts"
     report: list[str] = field(default_factory=lambda: ["pdf", "html"])
     output_dir: str = ".qa-review/uac"           # runs, results and reports
-    language: str = "es"                         # language the agent writes the UACs in
+    language: str = "en"                         # language of the UACs and the report (en | es)
 
 
 def settings(root: Path) -> UacSettings:

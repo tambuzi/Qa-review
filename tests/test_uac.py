@@ -14,32 +14,32 @@ from qa_review.uac import api, gherkin, report, runner, scaffold, sources, store
 
 FEATURE = """\
 @task:PROJ-7
-Feature: Descuento en el carrito
-  Como cliente quiero pagar menos.
+Feature: Cart discount
+  As a customer I want to pay less.
 
   @UAC-1 @api @e2e @source:task @ref:1.1
-  Scenario: Un descuento válido se resta del total
-    Given un carrito de 50 €
-    When aplico un descuento de 5 €
-    Then el total es 45 €
+  Scenario: A valid discount is subtracted from the total
+    Given a cart of 50 €
+    When I apply a 5 € discount
+    Then the total is 45 €
 
   @UAC-2 @api @source:task @ref:1.2
-  Scenario Outline: Un descuento no positivo se rechaza
-    Given un carrito de 50 €
-    When aplico <importe> €
-    Then la respuesta es 422
-    And el total sigue en 50 €
+  Scenario Outline: A non-positive discount is rejected
+    Given a cart of 50 €
+    When I apply <amount> €
+    Then the response is 422
+    And the total stays at 50 €
 
     Examples:
-      | importe |
+      | amount  |
       | 0       |
       | -3      |
 
   @UAC-3 @api @source:code
-  Scenario: El total nunca es negativo
-    Given un carrito de 10 €
-    When aplico 15 €
-    Then el total es 0 €
+  Scenario: The total is never negative
+    Given a cart of 10 €
+    When I apply 15 €
+    Then the total is 0 €
 """
 
 PNG = base64.b64encode(bytes.fromhex(
@@ -50,7 +50,7 @@ PNG = base64.b64encode(bytes.fromhex(
 # ---------------------------------------------------------------- Gherkin
 def test_parse_feature():
     f = gherkin.parse(FEATURE)
-    assert f.name == "Descuento en el carrito" and f.tags == ["@task:PROJ-7"]
+    assert f.name == "Cart discount" and f.tags == ["@task:PROJ-7"]
     assert [s.uac_id for s in f.scenarios] == ["UAC-1", "UAC-2", "UAC-3"]
     s2 = f.scenarios[1]
     assert s2.outline and "| -3      |" in s2.text and s2.kinds == ["api"]
@@ -91,18 +91,18 @@ REQUIREMENTS = """# Requirements Document
 
 ## Requirements
 
-### Requirement 1: Aplicar descuento
-**User Story:** Como cliente, quiero aplicar un descuento, para pagar menos.
+### Requirement 1: Apply a discount
+**User Story:** As a customer, I want to apply a discount, so that I pay less.
 
 #### Acceptance Criteria
-1. WHEN el cliente aplica un descuento válido THEN el sistema SHALL restarlo
-2. IF el descuento es 0 THEN el sistema SHALL rechazarlo
+1. WHEN the customer applies a valid discount THEN the system SHALL subtract it
+2. IF the discount is 0 THEN the system SHALL reject it
 
 ### Requirement 2
-**User Story:** Como admin, quiero ver los descuentos.
+**User Story:** As an admin, I want to see the discounts.
 
 #### Acceptance Criteria
-1. WHEN el admin abre el listado THEN el sistema SHALL mostrar los descuentos
+1. WHEN the admin opens the list THEN the system SHALL show the discounts
 """
 
 
@@ -119,7 +119,7 @@ def test_kiro_spec(repo):
                                           "files": ["requirements.md", "design.md"]}]
     t = sources.from_kiro(repo, "cart-discount")
     assert [c["id"] for c in t.criteria] == ["1.1", "1.2", "2.1"]
-    assert t.criteria[0]["story"].startswith("Como cliente")
+    assert t.criteria[0]["story"].startswith("As a customer")
     assert "## design.md" in t.text
     with pytest.raises(sources.SourceError, match="found: cart-discount"):
         sources.from_kiro(repo, "nope")
@@ -135,13 +135,13 @@ def test_agenticos_board(repo, tmp_path, monkeypatch):
     con = sqlite3.connect(data / "board.db")
     con.executescript("CREATE TABLE features(slug TEXT, title TEXT); CREATE TABLE tasks(id INTEGER, feature TEXT, "
                       "project TEXT, title TEXT, spec TEXT);"
-                      "INSERT INTO features VALUES('discounts','Descuentos');"
-                      "INSERT INTO tasks VALUES(12,'discounts','proj','Endpoint de descuento','Añadir POST /cart/discount');")
+                      "INSERT INTO features VALUES('discounts','Discounts');"
+                      "INSERT INTO tasks VALUES(12,'discounts','proj','Discount endpoint','Add POST /cart/discount');")
     con.commit()
     con.close()
     monkeypatch.setenv("QA_REVIEW_AGENTICOS_HOME", str(home))
     t = api.resolve_task(repo, "agenticos", "12")
-    assert t.ref == "discounts#12" and "Añadir POST /cart/discount" in t.text and "Brief: discounts" in t.text
+    assert t.ref == "discounts#12" and "Add POST /cart/discount" in t.text and "Brief: discounts" in t.text
     assert "## Contract" in t.text
     with pytest.raises(sources.SourceError, match="no task 99"):
         api.resolve_task(repo, "agenticos", "99")
@@ -152,8 +152,8 @@ def test_agenticos_board(repo, tmp_path, monkeypatch):
 def test_text_source_needs_text(repo):
     with pytest.raises(sources.SourceError, match="empty"):
         api.resolve_task(repo, "jira", "PROJ-7", "")
-    t = api.resolve_task(repo, "jira", "PROJ-7", "Como cliente...", "Descuentos")
-    assert (t.source, t.ref, t.title) == ("jira", "PROJ-7", "Descuentos")
+    t = api.resolve_task(repo, "jira", "PROJ-7", "As a customer...", "Discounts")
+    assert (t.source, t.ref, t.title) == ("jira", "PROJ-7", "Discounts")
 
 
 def test_code_signals(repo):
@@ -183,17 +183,17 @@ def test_settings_and_formats(repo):
 def test_save_validates_and_writes(repo):
     with pytest.raises(gherkin.GherkinError, match="not valid"):
         api.save(repo, "x", "Feature: X\n  @api\n  Scenario: a\n    When b\n    Then c\n")
-    res = api.save(repo, "PROJ-7 Descuentos", FEATURE)
-    assert res["saved"] == "qa/uac/proj-7-descuentos.feature"
+    res = api.save(repo, "PROJ-7 Discounts", FEATURE)
+    assert res["saved"] == "qa/uac/proj-7-discounts.feature"
     assert [u["id"] for u in res["uacs"]] == ["UAC-1", "UAC-2", "UAC-3"]
-    assert api.show(repo, "proj-7-descuentos")["uacs"][2]["source"] == "code"
+    assert api.show(repo, "proj-7-discounts")["uacs"][2]["source"] == "code"
 
 
 def test_draft_packet(repo):
     kiro(repo)
     (repo / "app" / "api.py").write_text('@app.post("/cart/discount")\ndef discount(): ...\n')
     text = api.draft_packet(repo, "kiro", "cart-discount")
-    assert "`1.2` IF el descuento es 0" in text
+    assert "`1.2` IF the discount is 0" in text
     assert "POST /cart/discount (app/api.py:1)" in text
     assert 'uac_save(slug="cart-discount"' in text and "@task:cart-discount" in text
     assert "continue from 1" in text
@@ -228,7 +228,7 @@ def fake_results():
     return {"suites": [{"title": "d.spec.ts", "file": "d.spec.ts", "specs": [
         spec("[UAC-1] api", "expected", [api_att]),
         spec("[UAC-1] ui", "expected", [shot, {"name": "screenshot", "contentType": "image/png", "body": PNG}]),
-        spec("[UAC-2] rechaza 0", "unexpected", err="\x1b[31mExpected: 422\nReceived: 200\x1b[39m"),
+        spec("[UAC-2] rejects 0", "unexpected", err="\x1b[31mExpected: 422\nReceived: 200\x1b[39m"),
         spec("smoke without uac", "expected"),
     ], "suites": []}]}
 
@@ -263,10 +263,17 @@ def test_run_maps_results_to_uacs(uac_repo, monkeypatch):
     run = runner.load_run(uac_repo, "d")
     assert run["task_ref"] == "PROJ-7" and "BASE=https://staging.app.com" in run["output_tail"]
     html = Path(res["report"]["html"]).read_text(encoding="utf-8")
-    assert "NO ACEPTADO" in html and "Sin cubrir" in html and "UAC-3" in html
+    assert "NOT ACCEPTED" in html and "Not covered" in html and "UAC-3" in html
     assert html.count("data:image/png;base64,") == 1          # the automatic screenshot is skipped: test took its own
     assert "&quot;total&quot;: 45" in html
     assert (uac_repo / ".qa-review" / "uac" / ".gitignore").read_text() == "*\n"
+
+
+def test_report_in_spanish(uac_repo, monkeypatch):
+    (uac_repo / ".qa-review.yaml").write_text(yaml.safe_dump({"uac": {"language": "es"}}))
+    res = api.run(uac_repo, "d", host="localhost:3000", formats="html")
+    html = Path(res["report"]["html"]).read_text(encoding="utf-8")
+    assert "Informe de aceptación" in html and "NO ACEPTADO" in html and "Sin cubrir" in html
 
 
 def test_pdf_failure_keeps_html(uac_repo, monkeypatch):
@@ -336,7 +343,7 @@ def test_mcp_lists_uac_tools(repo):
     names, pkt, saved = asyncio.run(go())
     assert {"uac_sources", "uac_draft_packet", "uac_save", "uac_show", "uac_tests_packet", "uac_run",
             "uac_report"} <= names
-    assert "`1.1` WHEN el cliente aplica" in pkt
+    assert "`1.1` WHEN the customer applies" in pkt
     assert saved["saved"] == "qa/uac/cart-discount.feature"
 
 

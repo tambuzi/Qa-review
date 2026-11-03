@@ -158,7 +158,7 @@ def _test(t: dict, run_dir: Path, L: dict) -> str:
     return "".join(parts)
 
 
-def html_report(run: dict, language: str = "es") -> str:
+def html_report(run: dict, language: str = "en") -> str:
     L = LABELS.get(language, LABELS["en"])
     run_dir = Path(run["run_dir"])
     c = run["counts"]
