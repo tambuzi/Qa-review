@@ -201,6 +201,7 @@ def test_draft_packet(repo):
     assert "POST /cart/discount (app/api.py:1)" in text
     assert 'uac_save(slug="cart-discount"' in text and "@task:cart-discount" in text
     assert "continue from 1" in text
+    assert "Write everything in English" in text and "Translate when the task" in text
     api.save(repo, "cart-discount", FEATURE)
     again = api.draft_packet(repo, "kiro", "cart-discount")
     assert "UACs already saved" in again and "continue from 4" in again
@@ -211,6 +212,7 @@ def test_tests_packet_scaffolds_once(repo):
     text = api.tests_packet(repo, "d")
     assert "Scaffolding created: `playwright.uac.config.ts`, `tests/uac/evidence.ts`" in text
     assert "tests/uac/d.spec.ts" in text and "[UAC-1]" in text
+    assert "write them in\nEnglish, like the UACs" in text
     cfg = (repo / "playwright.uac.config.ts").read_text()
     assert "testDir: './tests/uac'" in cfg and "process.env.BASE_URL" in cfg
     (repo / "playwright.uac.config.ts").write_text("// mine")

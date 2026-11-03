@@ -16,8 +16,11 @@ DRAFT_RULES = """\
 ## How to write them
 
 Write ONE Gherkin file (one `Feature`, one `Scenario` per acceptance criterion) and save it with
-`uac_save(slug="{slug}", gherkin=...)`. Write the scenarios in {language}. Gherkin keywords stay in
-English (Given/When/Then) unless the file starts with `# language: es` (Dado/Cuando/Entonces).
+`uac_save(slug="{slug}", gherkin=...)`. Write everything in {language}: the Feature title and description,
+scenario names and steps. Translate when the task, the spec or the existing tests are written in another
+language; only texts the product shows (quoted messages, labels, buttons) stay exactly as the product writes
+them. Gherkin keywords stay in English (Given/When/Then) unless the file starts with `# language: es`
+(Dado/Cuando/Entonces).
 
 Tag the `Feature` with `@task:{ref}` so the report can trace it back to the task.
 
@@ -189,7 +192,8 @@ TESTS_RULES = """\
 
 Write `{spec_file}` with Playwright Test (TypeScript). One or more tests per UAC; every test title starts
 with the UAC id in brackets, e.g. `test('[UAC-1] the discount is subtracted from the total', ...)`. A UAC with no test
-is reported as NOT COVERED.
+is reported as NOT COVERED. Test titles, `shot` labels and `note` texts appear in the report: write them in
+{language}, like the UACs.
 
 - `@e2e` UACs: use `page` and relative URLs (`page.goto('/cart')`): the base URL is the host of the run.
 - `@api` UACs: use the `request` fixture (`request.post('/api/cart/discount', {{ data }})`), same base URL.
@@ -243,7 +247,7 @@ def tests(root: Path, slug: str) -> str:
     if existing.exists():
         parts += [f"## Current `{spec_file}` (extend it; keep passing tests)", "```ts",
                   existing.read_text(encoding="utf-8")[:20_000].rstrip(), "```", ""]
-    parts.append(TESTS_RULES.format(spec_file=spec_file, slug=slug))
+    parts.append(TESTS_RULES.format(spec_file=spec_file, slug=slug, language=_LANG.get(st.language, st.language)))
     return "\n".join(parts)
 
 
