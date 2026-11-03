@@ -107,6 +107,11 @@ def test_init_merges_configs(repo):
     assert "qa-review" in kiro["mcpServers"]
     assert (repo / ".claude" / "skills" / "qa-review" / "SKILL.md").exists()
     assert (repo / ".kiro" / "steering" / "qa-review.md").exists()
+    master = (repo / ".claude" / "skills" / "qa-master" / "SKILL.md").read_text()
+    assert master.startswith("---\nname: qa-master\n") and "### Triage every red" in master
+    steering = (repo / ".kiro" / "steering" / "qa-master.md").read_text()
+    assert steering.startswith("---\ninclusion: manual\n---\n# qa-master") and "name: qa-master" not in steering
+    assert "qa-master" in (repo / ".kiro" / "steering" / "qa-review.md").read_text()
     assert (repo / ".qa-review.yaml").exists()
     assert any("verify_command" in l for l in lines)
     again = init(repo, command="qa-review")

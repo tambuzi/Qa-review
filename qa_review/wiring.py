@@ -10,6 +10,8 @@ from pathlib import Path
 
 from .config import CONFIG_NAME
 
+QA_MASTER = (Path(__file__).parent / "skills" / "qa-master.md").read_text(encoding="utf-8")
+
 CONFIG_TEMPLATE = """\
 # qa-review settings. Everything is optional: without this file checks are auto-detected.
 # base: main
@@ -74,6 +76,9 @@ When asked for acceptance criteria, UAT, "UACs" or an acceptance report for a ta
 5. Prove AND break: besides functional UACs, write adversarial ones (`@break:<category>`) from the attack plan,
    and after each run use `uac_iterate_packet` for the next round: attack around what broke, escalate what
    held, cover the gaps. Stop when a round finds nothing new or the user says so.
+
+For the judgment behind these steps (what to test, how to triage a failure, when to stop, how to report bugs)
+follow the `qa-master` skill.
 """
 
 STEERING = """\
@@ -84,7 +89,16 @@ inclusion: always
 
 Before reporting a change as finished, use the `qa-review` MCP tools: `qa_run`, fix what blocks,
 `qa_review_packet`, review, `qa_submit_review`, then share `qa_report`. Do not claim done on a `block` verdict.
+
+For acceptance criteria, acceptance tests or "try to break it" requests, read `.kiro/steering/qa-master.md`
+first and follow it.
 """
+
+
+def kiro_steering(skill: str) -> str:
+    """The qa-master skill as a Kiro steering file: loaded on demand (#qa-master) or when the steering above asks."""
+    body = skill.split("---", 2)[2].lstrip() if skill.startswith("---") else skill
+    return "---\ninclusion: manual\n---\n" + body
 
 
 def _merge_mcp(path: Path, name: str, entry: dict) -> str:
@@ -120,9 +134,11 @@ def init(root: Path, claude: bool = True, kiro: bool = True, command: str | None
     if claude:
         out.append(_merge_mcp(root / ".mcp.json", "qa-review", entry))
         out.append(_write_new(root / ".claude" / "skills" / "qa-review" / "SKILL.md", SKILL))
+        out.append(_write_new(root / ".claude" / "skills" / "qa-master" / "SKILL.md", QA_MASTER))
     if kiro:
         out.append(_merge_mcp(root / ".kiro" / "settings" / "mcp.json", "qa-review", entry))
         out.append(_write_new(root / ".kiro" / "steering" / "qa-review.md", STEERING))
+        out.append(_write_new(root / ".kiro" / "steering" / "qa-master.md", kiro_steering(QA_MASTER)))
     out.append("agenticOS (optional): to make board workers pass qa-review before 'done', set this project's "
                f"worker.verify_command to: {shlex.join([*parts, 'run', '.', '--ci'])}  "
                "(it runs in the task's worktree)")

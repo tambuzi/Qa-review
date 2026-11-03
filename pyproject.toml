@@ -18,6 +18,9 @@ qa-review = "qa_review.cli:main"
 [tool.setuptools.packages.find]
 include = ["qa_review*"]
 
+[tool.setuptools.package-data]
+qa_review = ["skills/*.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

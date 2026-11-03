@@ -180,8 +180,10 @@ it **adds** the `qa-review` server without touching the others (for example `gra
 | `.qa-review.yaml` | Project settings (all optional; written commented out) |
 | `.mcp.json` → `qa-review` server | Claude Code |
 | `.claude/skills/qa-review/SKILL.md` | Tells Claude Code when and how to use it |
+| `.claude/skills/qa-master/SKILL.md` | The QA judgment: how to model risk, triage failures, iterate and report bugs |
 | `.kiro/settings/mcp.json` → `qa-review` server | Kiro |
 | `.kiro/steering/qa-review.md` | Kiro rule: run QA before calling something done |
+| `.kiro/steering/qa-master.md` | The same QA judgment for Kiro (`inclusion: manual`, `#qa-master`) |
 
 Options:
 
@@ -222,7 +224,8 @@ The installed skill walks the agent through this flow:
 ## 6. Using it from Kiro
 
 Same as Claude Code: the server is in `.kiro/settings/mcp.json` and the *steering* file
-(`.kiro/steering/qa-review.md`, `inclusion: always`) reminds Kiro to run QA before finishing.
+(`.kiro/steering/qa-review.md`, `inclusion: always`) reminds Kiro to run QA before finishing, and points it to
+`.kiro/steering/qa-master.md` for acceptance testing. You can also pull that one into a chat with `#qa-master`.
 
 To automate it further, create a Kiro **agent hook** (for example manual, or when a spec task finishes) with the
 prompt: *"Run qa_run with level quick, fix what blocks and summarise the qa_report"*.
@@ -298,6 +301,23 @@ hostile requests, and the next round attacks around whatever broke (see [Prove a
 
 As with the review, qa-review never calls a model: your agent writes the UACs and the tests from the packets
 qa-review prepares, and qa-review validates, stores, runs and documents them.
+
+### The qa-master skill
+
+The tools do the mechanics; the **qa-master** skill (installed by `qa-review init`, source in
+`qa_review/skills/qa-master.md`) gives the agent the judgment of a senior QA:
+
+- **Model before testing:** actors, domain invariants (money in exact cents, time zones, text limits,
+  identities), the state × action table, the oracle for each behaviour and where the risk is.
+- **UACs and tests that can fail:** concrete values, the Then as the oracle (status, body and state after),
+  boundaries on both sides, assumptions written down, and "mutate it in your head" before trusting a test.
+- **Triage every red:** product bug, test bug, environment, flaky or spec question, and reproduce outside the
+  test before calling it a bug. Check the greens too: a `@break` that never reached the system proves nothing.
+- **Iterate where it broke:** bugs cluster, ask what each bug implies, tours by domain, and when to stop.
+- **Report like a QA lead:** confirmed bugs by severity with a repro, questions for product, important things
+  outside the task, coverage in one line.
+
+Projects wired before this skill existed get it by running `qa-review init` again (existing files are kept).
 
 ### Where UACs come from
 
