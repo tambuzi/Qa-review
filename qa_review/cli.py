@@ -69,6 +69,41 @@ def cmd_init(a) -> int:
     return EXIT_PASS
 
 
+def cmd_uac(a) -> int:
+    from .uac import api as uac
+    root = Path(a.path)
+    if a.action == "sources":
+        print(json.dumps(uac.list_sources(root), indent=1, ensure_ascii=False))
+    elif a.action == "draft":
+        text = Path(a.text_file).read_text(encoding="utf-8") if a.text_file else None
+        print(uac.draft_packet(root, a.source, a.ref, text, a.title, a.slug, a.base))
+    elif a.action == "save":
+        text = sys.stdin.read() if a.file == "-" else Path(a.file).read_text(encoding="utf-8")
+        print(json.dumps(uac.save(root, a.slug, text), indent=1, ensure_ascii=False))
+    elif a.action == "show":
+        print(json.dumps(uac.show(root, a.slug), indent=1, ensure_ascii=False))
+    elif a.action == "tests":
+        print(uac.tests_packet(root, a.slug))
+    else:
+        if a.action == "run":
+            res = uac.run(root, a.slug, host=a.host, formats=a.format, allow_protected=a.allow_protected)
+        else:
+            res = uac.report_again(root, a.slug, a.run, a.format)
+        c = res["counts"]
+        print(f"{res['verdict'].upper()}  {c['passed']}/{c['total']} UAC passed"
+              + "".join(f", {c[k]} {k.replace('_', ' ')}" for k in ("failed", "flaky", "skipped", "not_covered") if c[k]))
+        for u in res["uacs"]:
+            print(f"  {u['id']:<7} {u['status']:<12} {u['name']}")
+        for kind, path in res["report"].items():
+            if kind != "pdf_method":
+                print(f"{kind}: {path}")
+        for err in res["report_errors"]:
+            print(f"report: {err}", file=sys.stderr)
+        if a.action == "run":
+            return EXIT_PASS if res["verdict"] == "pass" else EXIT_FAIL
+    return EXIT_PASS
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="qa-review", description="QA + code review in one step.")
     p.add_argument("--version", action="version", version=__version__)
@@ -111,10 +146,44 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--command", help="how to start qa-review (default: this Python with -m qa_review)")
     s.set_defaults(fn=cmd_init)
 
+    u = sub.add_parser("uac", help="acceptance criteria: draft, save, tests, run with evidence, report")
+    usub = u.add_subparsers(dest="action", required=True)
+    s = usub.add_parser("sources", help="where UACs can come from in this project")
+    s.add_argument("path", nargs="?", default=".")
+    s = usub.add_parser("draft", help="print the packet to draft the UACs of a task")
+    s.add_argument("path", nargs="?", default=".")
+    s.add_argument("--source", required=True, help="kiro | agenticos | jira | linear | text")
+    s.add_argument("--ref", help="Kiro spec name, agenticOS task id or issue key")
+    s.add_argument("--text-file", help="file with the issue text (Jira/Linear/text)")
+    s.add_argument("--title")
+    s.add_argument("--slug")
+    s.add_argument("--base")
+    s = usub.add_parser("save", help="validate and save a Gherkin file of UACs")
+    s.add_argument("slug")
+    s.add_argument("file", help="Gherkin file, or - for stdin")
+    s.add_argument("path", nargs="?", default=".")
+    for name, help_ in (("show", "show the saved UACs"), ("tests", "print the packet to write the UAC tests")):
+        s = usub.add_parser(name, help=help_)
+        s.add_argument("slug")
+        s.add_argument("path", nargs="?", default=".")
+    s = usub.add_parser("run", help="run the UAC tests against a host and write the report")
+    s.add_argument("slug")
+    s.add_argument("path", nargs="?", default=".")
+    s.add_argument("--host", help="URL to test (default: `host:` in .qa-review.yaml)")
+    s.add_argument("--format", help="pdf, html or pdf,html (default: uac.report in .qa-review.yaml)")
+    s.add_argument("--allow-protected", action="store_true")
+    s = usub.add_parser("report", help="re-create the report of a run in another format")
+    s.add_argument("slug")
+    s.add_argument("path", nargs="?", default=".")
+    s.add_argument("--run", help="run id (default: latest)")
+    s.add_argument("--format", help="pdf, html or pdf,html")
+    for s in usub.choices.values():
+        s.set_defaults(fn=cmd_uac)
+
     a = p.parse_args(argv)
     try:
         return a.fn(a)
-    except (GitError, ConfigError, FileNotFoundError, ValueError) as e:
+    except (GitError, ConfigError, FileNotFoundError, ValueError, RuntimeError) as e:
         print(f"qa-review: {e}", file=sys.stderr)
         return EXIT_ERROR
 

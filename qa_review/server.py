@@ -108,6 +108,50 @@ def build(default_root: Path) -> FastMCP:
         findings, sensitive = security.scan(gitdiff.collect(cfg.root, base or cfg.base))
         return {"findings": [f.to_dict() for f in findings], "sensitive_paths": sensitive}
 
+    # ---------------------------------------------------------------- UAC
+    from .uac import api as uac
+
+    @mcp.tool()
+    def uac_sources(project: str | None = None) -> dict:
+        """Where acceptance criteria can come from here: Kiro specs, agenticOS board, Jira/Linear (via you)."""
+        return uac.list_sources(root_of(project))
+
+    @mcp.tool()
+    def uac_draft_packet(source: str, ref: str | None = None, task_text: str | None = None, title: str | None = None,
+                         slug: str | None = None, base: str | None = None, project: str | None = None) -> str:
+        """Step 1. Task + code changes + rules to write the UACs in Gherkin. source: kiro (ref=spec name),
+        agenticos (ref=task id), jira/linear/text (task_text=the issue you read with your connector, ref=key)."""
+        return uac.draft_packet(root_of(project), source, ref, task_text, title, slug, base)
+
+    @mcp.tool()
+    def uac_save(slug: str, gherkin: str, project: str | None = None) -> dict:
+        """Step 2. Validate and save the UACs (one Scenario per UAC, tagged @UAC-n and @e2e/@api)."""
+        return uac.save(root_of(project), slug, gherkin)
+
+    @mcp.tool()
+    def uac_show(slug: str, project: str | None = None) -> dict:
+        """The saved UACs of a slug, parsed."""
+        return uac.show(root_of(project), slug)
+
+    @mcp.tool()
+    def uac_tests_packet(slug: str, project: str | None = None) -> str:
+        """Step 3. Creates the Playwright scaffolding if missing and explains how to write one test per UAC."""
+        return uac.tests_packet(root_of(project), slug)
+
+    @mcp.tool()
+    def uac_run(slug: str, host: str | None = None, format: str | None = None, allow_protected: bool = False,
+                project: str | None = None) -> dict:
+        """Step 4. Run the UAC tests against host and write the report with evidence for each UAC.
+        format: pdf, html or "pdf,html" (default from .qa-review.yaml). Never set allow_protected unless the
+        user explicitly asked to test that protected host."""
+        return uac.run(root_of(project), slug, host=host, formats=format, allow_protected=allow_protected)
+
+    @mcp.tool()
+    def uac_report(slug: str, run_id: str | None = None, format: str | None = None,
+                   project: str | None = None) -> dict:
+        """Re-create the report of a UAC run (latest if omitted) in another format, without running the tests."""
+        return uac.report_again(root_of(project), slug, run_id, format)
+
     return mcp
 
 

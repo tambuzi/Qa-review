@@ -29,6 +29,12 @@ CONFIG_TEMPLATE = """\
 # host: http://localhost:8000      # default target; override per run with --host
 # host_env: [BASE_URL]             # env vars that receive the host (QA_REVIEW_HOST is always set)
 # protected_hosts: [miapp.com]     # production: only with --allow-protected
+# uac:                              # acceptance criteria (UAC) with evidence
+#   dir: qa/uac                     # Gherkin files, one per task
+#   tests_dir: tests/uac            # Playwright tests, one spec per task
+#   report: [pdf, html]             # pdf, html or both
+#   output_dir: .qa-review/uac      # runs, evidence and reports
+#   language: es                    # language of the UACs and the report (es | en)
 """
 
 SKILL = """\
@@ -49,6 +55,20 @@ description: >
    the reviewer must not inherit the author's assumptions.
 4. `qa_submit_review` with verdict, summary, findings and `cleared_rules` for flags that are false positives.
 5. `qa_report` and tell the user the verdict and what is left. Never claim "done" on a `block`.
+
+## Acceptance criteria (UAC) with evidence
+
+When asked for acceptance criteria, UAT, "UACs" or an acceptance report for a task:
+
+1. `uac_sources`, then `uac_draft_packet` with the task: a Kiro spec (`source="kiro"`), an agenticOS board
+   task (`source="agenticos"`, `ref=<id>`), or a Jira/Linear issue you read with that connector and pass as
+   `task_text` (`source="jira"`, `ref=<key>`).
+2. Write the UACs in Gherkin following the packet's rules and save them with `uac_save`. Show them to the
+   user before writing tests when they are present.
+3. `uac_tests_packet`, then write the Playwright tests it asks for (E2E with `page`, API with `request`),
+   using the evidence helpers.
+4. `uac_run` with the host to test (ask which one if it is not clear). Report the verdict per UAC and give the
+   report path. A failing UAC is a finding, not something to hide: never weaken a test to make it pass.
 """
 
 STEERING = """\

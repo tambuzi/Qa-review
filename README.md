@@ -19,16 +19,17 @@ resultado; si no, sigue funcionando igual.
 5. [Uso desde Claude Code](#5-uso-desde-claude-code)
 6. [Uso desde Kiro](#6-uso-desde-kiro)
 7. [Uso desde la terminal](#7-uso-desde-la-terminal)
-8. [Configuración: `.qa-review.yaml`](#8-configuración-qa-reviewyaml)
-9. [Qué comprueba](#9-qué-comprueba)
-10. [El veredicto](#10-el-veredicto)
-11. [Integración con graphskill](#11-integración-con-graphskill)
-12. [Integración con agenticOS](#12-integración-con-agenticos)
-13. [CI (GitHub Actions)](#13-ci-github-actions)
-14. [Referencia de herramientas MCP](#14-referencia-de-herramientas-mcp)
-15. [Solución de problemas](#15-solución-de-problemas)
-16. [Desarrollo](#16-desarrollo)
-17. [Límites conocidos](#17-límites-conocidos)
+8. [Criterios de aceptación (UAC) con evidencias](#8-criterios-de-aceptación-uac-con-evidencias)
+9. [Configuración: `.qa-review.yaml`](#9-configuración-qa-reviewyaml)
+10. [Qué comprueba](#10-qué-comprueba)
+11. [El veredicto](#11-el-veredicto)
+12. [Integración con graphskill](#12-integración-con-graphskill)
+13. [Integración con agenticOS](#13-integración-con-agenticos)
+14. [CI (GitHub Actions)](#14-ci-github-actions)
+15. [Referencia de herramientas MCP](#15-referencia-de-herramientas-mcp)
+16. [Solución de problemas](#16-solución-de-problemas)
+17. [Desarrollo](#17-desarrollo)
+18. [Límites conocidos](#18-límites-conocidos)
 
 ---
 
@@ -135,10 +136,11 @@ autorizases `allow_protected` de forma explícita.
 | Opcional | Para qué |
 |---|---|
 | Las herramientas que ya use tu proyecto (ruff, pytest, npm scripts, phpunit, phpstan, go) | Los checks. Solo se ejecutan las que estén instaladas |
-| Node + `@playwright/test` | Tests end-to-end |
+| Node + `@playwright/test` | Tests end-to-end y tests de los UAC |
+| Chrome, Chromium, Edge o Brave | Informe de UAC en PDF (si no está el Chromium de Playwright) |
 | `schemathesis` | Fuzzing de la API contra su OpenAPI/Swagger |
-| graphskill | Impacto más preciso (ver [sección 11](#11-integración-con-graphskill)) |
-| agenticOS | Lecciones y reglas del equipo en la review (ver [sección 12](#12-integración-con-agenticos)) |
+| graphskill | Impacto más preciso (ver [sección 12](#12-integración-con-graphskill)) |
+| agenticOS | Lecciones y reglas del equipo en la review (ver [sección 13](#13-integración-con-agenticos)) |
 
 ---
 
@@ -283,9 +285,114 @@ así que nunca acaba en un commit.
 
 ---
 
-## 8. Configuración: `.qa-review.yaml`
+## 8. Criterios de aceptación (UAC) con evidencias
 
-Todo es opcional. Sin este archivo, los checks se **detectan solos** (ver [sección 9](#9-qué-comprueba)).
+qa-review puede convertir una tarea en **criterios de aceptación (UAC) en Gherkin**, generar a partir de
+ellos una **batería de tests Playwright (E2E y API)**, ejecutarla contra el host que elijas y entregar un
+**informe en PDF y/o HTML con las evidencias de cada UAC**: capturas de pantalla, peticiones y respuestas,
+errores, trazas y vídeo de los fallos.
+
+Igual que en la review, qa-review no llama a ningún modelo: tu agente redacta los UAC y los tests a partir
+de los paquetes que prepara qa-review, y qa-review los valida, guarda, ejecuta y documenta.
+
+### De dónde salen los UAC
+
+| Origen | Cómo se usa | Qué lee qa-review |
+|---|---|---|
+| **Spec de Kiro** | `source="kiro"`, `ref="<carpeta de la spec>"` | `.kiro/specs/<spec>/requirements.md` (con sus criterios EARS numerados `1.1`, `1.2`…), `design.md` y `tasks.md` |
+| **Board de agenticOS** | `source="agenticos"`, `ref="<id de la tarea>"` | Título y spec de la tarea, brief y contrato de la feature (solo lectura de `~/.agenticos/data/board.db`) |
+| **Jira / Linear** | El agente lee la issue con su conector y la pasa como `task_text` (`source="jira"`, `ref="PROJ-123"`) | El texto que le pasa el agente |
+| **El código** | Siempre, automáticamente | El diff de la rama: endpoints añadidos (FastAPI, Flask, Express, Laravel, Symfony, Nest/Spring, Django), páginas tocadas y símbolos cambiados |
+
+La tarea manda sobre **qué** debe pasar. El código **completa** los criterios con lo que la tarea no dice
+(validaciones, errores, endpoints). Si el código no hace algo que la tarea pide, el UAC se escribe igualmente:
+su test fallará, y eso es justo lo que el informe debe mostrar.
+
+### El flujo
+
+```
+uac_sources ─► uac_draft_packet ─► (el agente escribe Gherkin) ─► uac_save
+            ─► uac_tests_packet ─► (el agente escribe tests Playwright) ─► uac_run ─► informe PDF / HTML
+```
+
+1. **Borrador.** `uac_draft_packet(source="kiro", ref="cart-discount")` devuelve la tarea, los criterios que ya
+   trae, lo que cambió en el código y las reglas para escribir los UAC.
+2. **Guardar.** El agente escribe un `.feature` (un `Scenario` por UAC) y lo guarda con `uac_save`, que lo valida:
+   - cada escenario lleva un `@UAC-<n>` único y `@e2e` (UI) y/o `@api` (HTTP);
+   - `@source:task` o `@source:code` indica de dónde sale, y `@ref:1.2` / `@ref:PROJ-123` lo enlaza con el original;
+   - la `Feature` lleva `@task:<ref>` para trazar el informe hasta la tarea.
+
+   Se guarda en `qa/uac/<slug>.feature`, versionado con el código.
+3. **Tests.** `uac_tests_packet` crea (si no existen) `playwright.uac.config.ts` y `tests/uac/evidence.ts`, y explica
+   cómo escribir `tests/uac/<slug>.spec.ts`: el título de cada test empieza por `[UAC-n]`, y los helpers de evidencia
+   registran todo:
+   - `shot(page, 'etiqueta')`: captura de pantalla tras cada *Then* visible;
+   - `apiCall(request, 'POST', '/api/…', datos)`: guarda petición y respuesta (con cabeceras sensibles ocultas);
+   - `note('texto')`: cualquier dato relevante (ids creados, valores leídos).
+4. **Ejecutar.** `uac_run(slug, host="staging.miapp.com", format="pdf,html")` lanza los tests contra ese host
+   (`BASE_URL`), asocia cada resultado a su UAC y escribe el informe.
+
+### Estado de cada UAC y veredicto
+
+| Estado | Cuándo |
+|---|---|
+| Superado | Todos sus tests pasan |
+| Fallido | Algún test falla |
+| Inestable | Algún test pasó solo tras reintentar |
+| Omitido | Todos sus tests se saltaron |
+| Sin cubrir | Ningún test lleva su `[UAC-n]` |
+
+Veredicto global: **ACEPTADO** si todos están superados; **NO ACEPTADO** si alguno falla; **INCOMPLETO** si hay
+alguno sin cubrir, omitido o inestable. Los tests que no mencionan ningún UAC aparecen aparte, como "tests sin
+criterio asociado".
+
+### El informe
+
+Un único HTML autocontenido (imágenes incrustadas) del que se imprime el PDF. Contiene:
+
+- **Cabecera:** proyecto, tarea, host, rama y commit (avisa si hay cambios sin commitear), fecha, ejecución y duración.
+- **Veredicto** con el recuento por estado y una **tabla resumen** de los UAC con su tipo, origen, referencia y tests.
+- **Una sección por UAC** (en el PDF, una página nueva cada una): el escenario Gherkin y, por cada test, su resultado,
+  el error si falló y sus evidencias (capturas, petición/respuesta, notas y rutas a traza y vídeo).
+- **Detalles de la ejecución:** el comando y la salida.
+
+**Formato configurable:** `uac.report` en `.qa-review.yaml` (`[pdf, html]` por defecto), o `--format` / `format` en
+cada ejecución (`pdf`, `html`, `pdf,html` o `both`). `qa-review uac report <slug> --format html` regenera el informe
+de la última ejecución sin volver a lanzar los tests.
+
+**Cómo se genera el PDF** (por orden): con el Chromium de Playwright del proyecto y, si no está, con un Chrome,
+Chromium, Edge o Brave instalado (`QA_REVIEW_CHROME` fuerza una ruta concreta). Si no hay ninguno, se entrega el
+HTML y se indica el motivo; nunca te quedas sin informe.
+
+Los informes, capturas y resultados se guardan en `.qa-review/uac/<slug>/<ejecución>/` (ignorado por git).
+
+### Desde la terminal
+
+```bash
+qa-review uac sources                                    # specs de Kiro, board de agenticOS, UAC guardados
+qa-review uac draft --source kiro --ref cart-discount    # paquete para redactar los UAC
+qa-review uac draft --source jira --ref PROJ-123 --text-file issue.md
+qa-review uac save cart-discount cart-discount.feature   # valida y guarda (o "-" para stdin)
+qa-review uac show cart-discount
+qa-review uac tests cart-discount                        # andamiaje + paquete para escribir los tests
+qa-review uac run cart-discount --host staging.miapp.com --format pdf,html
+qa-review uac report cart-discount --format html         # regenerar el informe del último run
+```
+
+`uac run` devuelve `0` si el veredicto es ACEPTADO, `1` si no y `2` si hay un error (sin host, sin tests, host
+protegido…).
+
+### Requisitos de esta parte
+
+- Node y `@playwright/test` en el proyecto: `npm i -D @playwright/test && npx playwright install chromium`
+  (o usa tu Chrome con `QA_REVIEW_BROWSER_CHANNEL=chrome`).
+- Para grabar vídeo de los fallos, Playwright necesita `ffmpeg` (`npx playwright install ffmpeg`), o desactívalo
+  con `QA_REVIEW_VIDEO=off`.
+- Si la API exige token: `QA_REVIEW_API_TOKEN` se envía como `Authorization: Bearer …` en todas las peticiones.
+
+## 9. Configuración: `.qa-review.yaml`
+
+Todo es opcional. Sin este archivo, los checks se **detectan solos** (ver [sección 10](#10-qué-comprueba)).
 
 ```yaml
 # Contra qué comparar (por defecto: merge-base con main/master)
@@ -329,6 +436,15 @@ timeout_sec: 600
 host: http://localhost:8000
 host_env: [BASE_URL, API_URL]     # variables que reciben el host (QA_REVIEW_HOST siempre)
 protected_hosts: [miapp.com]      # producción: solo con --allow-protected
+
+# Criterios de aceptación (UAC)
+uac:
+  dir: qa/uac                     # archivos .feature (uno por tarea), versionados
+  tests_dir: tests/uac            # tests Playwright generados
+  playwright_config: playwright.uac.config.ts
+  report: [pdf, html]             # pdf, html o los dos
+  output_dir: .qa-review/uac      # ejecuciones, evidencias e informes
+  language: es                    # idioma de los UAC y del informe (es | en)
 ```
 
 **Niveles:**
@@ -340,7 +456,7 @@ protected_hosts: [miapp.com]      # producción: solo con --allow-protected
 
 ---
 
-## 9. Qué comprueba
+## 10. Qué comprueba
 
 ### Checks detectados automáticamente
 
@@ -386,7 +502,7 @@ En los archivos de test solo se aplican las reglas de secretos. Además, si el c
 
 ---
 
-## 10. El veredicto
+## 11. El veredicto
 
 Se decide con reglas fijas, para que sea predecible:
 
@@ -402,7 +518,7 @@ siempre.
 
 ---
 
-## 11. Integración con graphskill
+## 12. Integración con graphskill
 
 Con graphskill, el impacto es exacto: rangos de símbolos reales en cualquier lenguaje que indexe y el grafo
 de llamadas hasta profundidad 2. qa-review abre una sesión MCP corta con el servidor de graphskill del
@@ -428,7 +544,7 @@ qa-review status ~/ruta/a/tu-proyecto    # debe decir "graphskill: on, from the 
 
 ---
 
-## 12. Integración con agenticOS
+## 13. Integración con agenticOS
 
 ### agenticOS → qa-review (lectura)
 
@@ -459,7 +575,7 @@ Comprobación: `qa-review status` debe mostrar `agenticos: on, project '<slug>'`
 
 ---
 
-## 13. CI (GitHub Actions)
+## 14. CI (GitHub Actions)
 
 ```yaml
 jobs:
@@ -486,7 +602,7 @@ En CI solo corre la parte determinista. El informe aparece en el resumen del job
 
 ---
 
-## 14. Referencia de herramientas MCP
+## 15. Referencia de herramientas MCP
 
 Todas aceptan `project` (ruta) para trabajar sobre otro proyecto distinto del que arrancó el servidor.
 
@@ -499,6 +615,13 @@ Todas aceptan `project` (ruta) para trabajar sobre otro proyecto distinto del qu
 | `qa_report` | `run_id`, `format` (`markdown`/`json`) | Informe completo |
 | `qa_impact` | `base` | Solo el impacto, sin ejecutar checks |
 | `qa_security_scan` | `base` | Solo las reglas de seguridad, sin ejecutar checks |
+| `uac_sources` | — | Specs de Kiro, estado de agenticOS y UAC ya guardados |
+| `uac_draft_packet` | `source` (`kiro`/`agenticos`/`jira`/`linear`/`text`), `ref`, `task_text`, `title`, `slug`, `base` | Tarea, criterios existentes, cambios del código y reglas para escribir los UAC |
+| `uac_save` | `slug`, `gherkin` | UAC validados y guardados (o la lista de problemas) |
+| `uac_show` | `slug` | Los UAC guardados, ya interpretados |
+| `uac_tests_packet` | `slug` | Crea el andamiaje y explica cómo escribir los tests |
+| `uac_run` | `slug`, `host`, `format`, `allow_protected` | Veredicto, estado por UAC y rutas del informe |
+| `uac_report` | `slug`, `run_id`, `format` | Regenera el informe de una ejecución en otro formato |
 
 Formato de cada hallazgo en `findings`:
 
@@ -511,7 +634,7 @@ Severidades: `info`, `low`, `medium`, `high`, `critical`.
 
 ---
 
-## 15. Solución de problemas
+## 16. Solución de problemas
 
 | Síntoma | Qué hacer |
 |---|---|
@@ -524,11 +647,17 @@ Severidades: `info`, `low`, `medium`, `high`, `critical`.
 | `agenticos: ... not linked` | Enlaza el proyecto con `aos link <proyecto>` |
 | El agente no ve las herramientas | Reinicia Claude Code o Kiro en el proyecto y aprueba el servidor `qa-review` |
 | El cambio incluye cosas que no esperabas | Mira la línea `Base:` del informe y usa `--base` para fijarla |
+| `uac run`: "no tests yet" | Escribe `tests/uac/<slug>.spec.ts` (pide `uac_tests_packet`) |
+| `uac run`: "Playwright produced no results" | Falta `@playwright/test` o el navegador: `npm i -D @playwright/test && npx playwright install chromium` |
+| Tests de UI fallan con "ffmpeg" | `npx playwright install ffmpeg` o `QA_REVIEW_VIDEO=off` |
+| Un UAC sale "Sin cubrir" | Ningún test empieza por `[UAC-n]`: añade uno |
+| Solo sale el HTML, sin PDF | No hay Chromium ni Chrome: instala uno o indica su ruta con `QA_REVIEW_CHROME` (el motivo aparece en `report_errors`) |
+| "no task N on the agenticOS board" | Comprueba el id con `aos board`; qa-review lee `~/.agenticos/data/board.db` |
 | "no test found" para un archivo que sí tiene tests | El test no menciona el módulo en su nombre. Renómbralo o ignora el aviso (es warn, no block) |
 
 ---
 
-## 16. Desarrollo
+## 17. Desarrollo
 
 ```bash
 cd ~/Projects/qa-review
@@ -551,6 +680,9 @@ qa_review/
   review.py         paquete de review
   report.py         veredicto e informe markdown
   wiring.py         `init`: Claude Code, Kiro y agenticOS
+  target.py         --host: validación, hosts protegidos, variables de entorno
+  uac/              criterios de aceptación: gherkin, sources (Kiro, agenticOS, código), store,
+                    packets, scaffold (Playwright + evidencias), runner, report (HTML/PDF), api
   integrations/
     graphskill.py   cliente MCP de graphskill (opcional)
     agenticos.py    lectura de lecciones y reglas (opcional)
@@ -561,7 +693,7 @@ El diseño y las decisiones están en [DESIGN.md](DESIGN.md).
 
 ---
 
-## 17. Límites conocidos
+## 18. Límites conocidos
 
 - Las reglas de seguridad son **heurísticas** por línea: pueden dar falsos positivos (por eso solo dan warn
   y el reviewer los descarta) y no sustituyen a un SAST completo.
