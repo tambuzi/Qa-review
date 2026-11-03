@@ -35,6 +35,8 @@ CONFIG_TEMPLATE = """\
 #   report: [pdf, html]             # pdf, html or both
 #   output_dir: .qa-review/uac      # runs, evidence and reports
 #   language: en                    # language of the UACs and the report (en | es)
+#   attacks: local                  # automatic attack battery: local (local hosts only) | always | off
+#   attack_timeout_sec: 10
 """
 
 SKILL = """\
@@ -69,6 +71,9 @@ When asked for acceptance criteria, UAT, "UACs" or an acceptance report for a ta
    using the evidence helpers.
 4. `uac_run` with the host to test (ask which one if it is not clear). Report the verdict per UAC and give the
    report path. A failing UAC is a finding, not something to hide: never weaken a test to make it pass.
+5. Prove AND break: besides functional UACs, write adversarial ones (`@break:<category>`) from the attack plan,
+   and after each run use `uac_iterate_packet` for the next round: attack around what broke, escalate what
+   held, cover the gaps. Stop when a round finds nothing new or the user says so.
 """
 
 STEERING = """\

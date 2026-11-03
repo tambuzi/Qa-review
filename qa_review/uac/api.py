@@ -74,11 +74,12 @@ def tests_packet(root: Path, slug: str) -> str:
 
 
 def run(root: Path, slug: str, host: str | None = None, formats: list[str] | str | None = None,
-        allow_protected: bool = False, task_ref: str | None = None) -> dict:
+        allow_protected: bool = False, task_ref: str | None = None, attacks: bool | None = None) -> dict:
     root = load_config(root).root
     if formats:
         formats = store.parse_formats(formats)           # validate before spending time on the run
-    data = runner.run(root, slug, host=host, allow_protected=allow_protected, task_ref=task_ref)
+    data = runner.run(root, slug, host=host, allow_protected=allow_protected, task_ref=task_ref,
+                      attacks_on=attacks)
     rep = report.write(root, data, formats)
     return summary(data, rep)
 
@@ -89,9 +90,23 @@ def report_again(root: Path, slug: str, run_id: str | None = None, formats: list
     return summary(data, report.write(root, data, store.parse_formats(formats) if formats else None))
 
 
+def iterate_packet(root: Path, slug: str, run_id: str | None = None) -> str:
+    root = load_config(root).root
+    return packets.iterate(root, slug, runner.load_run(root, slug, run_id))
+
+
 def summary(data: dict, rep: dict) -> dict:
+    battery = data.get("battery") or {}
     return {"run_id": data["id"], "slug": data["slug"], "verdict": data["verdict"], "host": data["host"],
             "counts": data["counts"],
+            "robustness": {"break_uacs": data["counts"].get("break_total", 0),
+                           "held": data["counts"].get("break_held", 0),
+                           "broken": data["counts"].get("break_broken", 0),
+                           "attack_gaps": (data.get("coverage") or {}).get("gaps", []),
+                           "battery": {k: battery.get(k) for k in ("ran", "reason", "cases", "broken")},
+                           "battery_breaks": [f"{r['endpoint']} · {r['label']} → {'; '.join(r['broke'])}"
+                                              for r in battery.get("results", []) if r["broke"]][:20]},
+            "next": "uac_iterate_packet: attack around what broke and cover the gaps",
             "uacs": [{"id": u["id"], "name": u["name"], "status": u["status"],
                       "tests": [{"title": t["title"], "status": t["status"],
                                  **({"error": t["error"][:500]} if t["error"] else {})} for t in u["tests"]]}

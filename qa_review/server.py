@@ -140,11 +140,19 @@ def build(default_root: Path) -> FastMCP:
 
     @mcp.tool()
     def uac_run(slug: str, host: str | None = None, format: str | None = None, allow_protected: bool = False,
-                project: str | None = None) -> dict:
-        """Step 4. Run the UAC tests against host and write the report with evidence for each UAC.
-        format: pdf, html or "pdf,html" (default from .qa-review.yaml). Never set allow_protected unless the
-        user explicitly asked to test that protected host."""
-        return uac.run(root_of(project), slug, host=host, formats=format, allow_protected=allow_protected)
+                attacks: bool | None = None, project: str | None = None) -> dict:
+        """Step 4. Run the UAC tests against host, then the automatic attack battery, and write the report with
+        evidence for each UAC. format: pdf, html or "pdf,html" (default from .qa-review.yaml). attacks: None =
+        settings (local hosts only by default); True only if the user asked to attack a non-local host. Never set
+        allow_protected unless the user explicitly asked to test that protected host."""
+        return uac.run(root_of(project), slug, host=host, formats=format, allow_protected=allow_protected,
+                       attacks=attacks)
+
+    @mcp.tool()
+    def uac_iterate_packet(slug: str, run_id: str | None = None, project: str | None = None) -> str:
+        """Step 5. The next round after a run: attack around what broke, escalate what held, cover the gaps of
+        the attack plan and the UACs without tests."""
+        return uac.iterate_packet(root_of(project), slug, run_id)
 
     @mcp.tool()
     def uac_report(slug: str, run_id: str | None = None, format: str | None = None,

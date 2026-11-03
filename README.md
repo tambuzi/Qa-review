@@ -292,6 +292,10 @@ qa-review can turn a task into **acceptance criteria (UAC) written in Gherkin**,
 Playwright tests (E2E and API)**, run it against the host you choose and deliver a **PDF and/or HTML report with
 the evidence for every UAC**: screenshots, requests and responses, errors, and traces and video of failures.
 
+The tests do not only **prove** that the change does what the task asks: they also try to **break** it. Every
+round includes adversarial UACs (`@break`) built from the change's attack surface, plus an automatic battery of
+hostile requests, and the next round attacks around whatever broke (see [Prove and break](#prove-and-break)).
+
 As with the review, qa-review never calls a model: your agent writes the UACs and the tests from the packets
 qa-review prepares, and qa-review validates, stores, runs and documents them.
 
@@ -303,16 +307,25 @@ qa-review prepares, and qa-review validates, stores, runs and documents them.
 | **agenticOS board** | `source="agenticos"`, `ref="<task id>"` | Task title and spec, feature brief and contract (read-only from `~/.agenticos/data/board.db`) |
 | **Jira / Linear** | The agent reads the issue with its connector and passes it as `task_text` (`source="jira"`, `ref="PROJ-123"`) | The text the agent passes |
 | **The code** | Always, automatically | The branch diff: added endpoints (FastAPI, Flask, Express, Laravel, Symfony, Nest/Spring, Django), touched pages and changed symbols |
+| **Existing tests** | Always, automatically | The project's tests, `.feature` files and e2e/acceptance specs that already call the endpoints of the change (Python, JS/TS, PHP, Go, Java/Kotlin, Ruby, Gherkin) |
 
 The task decides **what** must happen. The code **completes** the criteria with what the task does not say
 (validations, errors, endpoints). If the code does not do something the task asks for, the UAC is written
 anyway: its test will fail, and that is exactly what the report must show.
+
+**Existing tests are criteria someone already agreed on.** The draft packet lists, for each endpoint of the
+change, the existing tests that call it (file, test name and line). The agent turns every one that encodes a
+business rule into a UAC tagged `@source:tests @ref:<file>::<test>`, unless another UAC already covers it. When an
+existing test contradicts the task, that contradiction is reported as a finding instead of being silently
+resolved. qa-review's own generated tests (`tests/uac/`) are never used as a source.
 
 ### The flow
 
 ```
 uac_sources ─► uac_draft_packet ─► (agent writes Gherkin) ─► uac_save
             ─► uac_tests_packet ─► (agent writes Playwright tests) ─► uac_run ─► PDF / HTML report
+                                                                          │
+            ◄──────────── uac_iterate_packet (next round: break more) ◄───┘
 ```
 
 1. **Draft.** `uac_draft_packet(source="kiro", ref="cart-discount")` returns the task, the criteria it already
@@ -320,8 +333,9 @@ uac_sources ─► uac_draft_packet ─► (agent writes Gherkin) ─► uac_sav
 2. **Save.** The agent writes a `.feature` file (one `Scenario` per UAC) and saves it with `uac_save`, which
    validates it:
    - every scenario has a unique `@UAC-<n>` and `@e2e` (UI) and/or `@api` (HTTP);
-   - `@source:task` or `@source:code` says where it comes from, and `@ref:1.2` / `@ref:PROJ-123` links it to the
-     original;
+   - `@source:task`, `@source:code` or `@source:tests` says where it comes from, and `@ref:1.2` /
+     `@ref:PROJ-123` / `@ref:tests/test_cart.py::test_discount` links it to the original;
+   - adversarial scenarios also carry `@break:<category>` (for example `@break:boundary @break:injection`);
    - the `Feature` carries `@task:<ref>` so the report can be traced back to the task.
 
    It is saved in `qa/uac/<slug>.feature`, versioned with the code.
@@ -331,8 +345,55 @@ uac_sources ─► uac_draft_packet ─► (agent writes Gherkin) ─► uac_sav
    - `shot(page, 'label')`: a screenshot after each visible *Then*;
    - `apiCall(request, 'POST', '/api/…', data)`: records request and response (sensitive headers hidden);
    - `note('text')`: any relevant data (ids created, values read).
+
+   For `@break` UACs, `tests/uac/attacks.ts` adds the attack helpers: `PAYLOADS` (the same payloads as the
+   battery), `expectSafeError(res, {status})` (a 4xx, no 5xx, no leaked internals), `expectNoLeak(res)`,
+   `inParallel(n, fn)` (concurrency), `snapshot(request, url)` (state before/after), `failApi(page, pattern)` and
+   `goOffline(page)` (UI resilience).
 4. **Run.** `uac_run(slug, host="staging.myapp.com", format="pdf,html")` runs the tests against that host
-   (`BASE_URL`), maps every result to its UAC and writes the report.
+   (`BASE_URL`), maps every result to its UAC, runs the automatic attack battery and writes the report.
+5. **Iterate.** `uac_iterate_packet(slug)` prepares the next round from the last run: attack around what broke,
+   escalate what held, cover the gaps of the attack plan and the UACs without tests. Back to step 2.
+
+### Prove and break
+
+Every draft packet includes the **attack surface** of the change and a deterministic **attack plan**:
+
+- **Surface:** every endpoint the change adds or touches (from the code and, if configured, the OpenAPI spec),
+  with its method, path parameters and the body/query fields it reads; plus whether UI changed.
+- **Plan:** for every endpoint, the categories worth attacking, what to try and what the system must do instead:
+
+| Category | What it tries | What must happen |
+|---|---|---|
+| `boundary` | 0, -1, min-1, max+1, huge numbers, empty and 10k strings | 4xx or the exact rule; never a 5xx or a wrong result |
+| `types` | strings for numbers, null, arrays/objects, missing/extra fields, malformed JSON, wrong Content-Type | 4xx naming the field; no mass assignment |
+| `injection` | SQL, XSS, template, command, path traversal, NoSQL, CRLF | treated as plain data, escaped, no 5xx |
+| `unicode` | emoji, RTL, zero-width, combining characters, NUL | kept intact or a 4xx; never corrupted |
+| `auth` | no/invalid token, another user's id (IDOR), role fields in the body | 401/403/404 and no foreign data |
+| `http` | MB-sized bodies, repeated params, unexpected methods, long URLs | 413/405/4xx, fast |
+| `concurrency` | the same request N times in parallel, double submit | applied once, consistent state |
+| `state` | steps out of order, deleted/expired things, resubmits | 4xx/409, state unchanged |
+| `resilience` (UI) | failed or slow network, server errors, offline, narrow screen | a visible error and a way to recover |
+
+The agent writes `@break` UACs for that plan next to the functional ones. In the report a failed `@break` UAC
+shows as **Broken**: the attack succeeded, so it is a defect, not a test to rewrite.
+
+**The automatic battery.** After the Playwright tests, `uac_run` sends a battery of hostile requests (malformed
+JSON, wrong Content-Type, wrong types, boundary numbers, injection and unicode payloads, 2 MB bodies, hostile path
+parameters) to every endpoint of the change and checks four invariants that hold for any API:
+
+- no 5xx (and no dropped connection): bad input is the client's fault;
+- no leaks: no stack traces, SQL errors, file paths or debug pages in the response;
+- no reflected XSS: an injected `<script>` never comes back unescaped in HTML;
+- no hang: every request answers within `uac.attack_timeout_sec`.
+
+It needs no agent and no Playwright. Because it sends hostile input that may be written if the API accepts it,
+**it only runs against local hosts by default** (localhost, private IPs, docker service names, `.local`, `.test`,
+`.internal`). Control it with `uac.attacks` (`local` | `always` | `off`) or per run with `--attacks` /
+`--no-attacks` (`attacks=True/False` in MCP). `QA_REVIEW_API_TOKEN` is sent with every request.
+
+**Coverage.** `run.json` records the surface, the plan, which planned categories some `@break` UAC covers and
+which are still gaps; the gaps are listed in the report and in the next round's packet.
 
 ### UAC status and verdict
 
@@ -340,12 +401,13 @@ uac_sources ─► uac_draft_packet ─► (agent writes Gherkin) ─► uac_sav
 |---|---|
 | Passed | All its tests pass |
 | Failed | Any test fails |
+| Broken | A `@break` UAC failed: the attack succeeded |
 | Flaky | A test passed only after a retry |
 | Skipped | All its tests were skipped |
 | Not covered | No test carries its `[UAC-n]` |
 
-Overall verdict: **ACCEPTED** if all pass; **NOT ACCEPTED** if any fails; **INCOMPLETE** if any is not covered,
-skipped or flaky. Tests that mention no UAC are listed separately as "tests without a criterion".
+Overall verdict: **ACCEPTED** if all pass and the battery found nothing; **NOT ACCEPTED** if any UAC fails or
+breaks, or the battery broke the system; **INCOMPLETE** if any is not covered, skipped or flaky. Tests that mention no UAC are listed separately as "tests without a criterion".
 
 ### The report
 
@@ -355,6 +417,8 @@ One self-contained HTML file (images embedded) from which the PDF is printed. It
 - **Verdict** with the count per status, and a **summary table** of the UACs with type, source, reference and tests.
 - **One section per UAC** (in the PDF, each on a new page): the Gherkin scenario and, for every test, its result,
   the error if it failed and its evidence (screenshots, request/response, notes, and paths to trace and video).
+- **Robustness:** adversarial UACs that held and broke, the categories planned vs covered (gaps), and every
+  request of the automatic battery that broke an invariant, with the response.
 - **Run details:** the command and its output.
 
 **Configurable output:** `uac.report` in `.qa-review.yaml` (`[pdf, html]` by default), or `--format` / `format`
@@ -380,6 +444,8 @@ qa-review uac save cart-discount cart-discount.feature   # validate and save (or
 qa-review uac show cart-discount
 qa-review uac tests cart-discount                        # scaffolding + packet to write the tests
 qa-review uac run cart-discount --host staging.myapp.com --format pdf,html
+qa-review uac run cart-discount --host localhost:8000 --no-attacks   # skip the automatic battery
+qa-review uac iterate cart-discount                      # next round: attack around what broke
 qa-review uac report cart-discount --format html         # re-create the report of the latest run
 ```
 
@@ -450,6 +516,8 @@ uac:
   report: [pdf, html]             # pdf, html or both
   output_dir: .qa-review/uac      # runs, evidence and reports
   language: en                    # language of the UACs and the report (en | es)
+  attacks: local                  # automatic attack battery: local (local hosts only) | always | off
+  attack_timeout_sec: 10          # per request of the battery
 ```
 
 **Levels:**
@@ -621,11 +689,12 @@ All of them accept `project` (a path) to work on a project other than the one th
 | `qa_impact` | `base` | Impact only, no checks run |
 | `qa_security_scan` | `base` | Security rules only, no checks run |
 | `uac_sources` | — | Kiro specs, agenticOS status and saved UACs |
-| `uac_draft_packet` | `source` (`kiro`/`agenticos`/`jira`/`linear`/`text`), `ref`, `task_text`, `title`, `slug`, `base` | Task, existing criteria, code changes and rules for writing the UACs |
+| `uac_draft_packet` | `source` (`kiro`/`agenticos`/`jira`/`linear`/`text`), `ref`, `task_text`, `title`, `slug`, `base` | Task, existing criteria, code changes, existing tests of the endpoints, attack surface and plan, and rules for writing the UACs |
 | `uac_save` | `slug`, `gherkin` | Validated and saved UACs (or the list of problems) |
 | `uac_show` | `slug` | The saved UACs, parsed |
 | `uac_tests_packet` | `slug` | Creates the scaffolding and explains how to write the tests |
-| `uac_run` | `slug`, `host`, `format`, `allow_protected` | Verdict, status per UAC and report paths |
+| `uac_run` | `slug`, `host`, `format`, `allow_protected`, `attacks` | Verdict, status per UAC, robustness (battery and gaps) and report paths |
+| `uac_iterate_packet` | `slug`, `run_id` | The next round: what broke, what held, plan gaps and UACs without tests |
 | `uac_report` | `slug`, `run_id`, `format` | Re-creates the report of a run in another format |
 
 Format of each finding in `findings`:
@@ -658,6 +727,11 @@ Severities: `info`, `low`, `medium`, `high`, `critical`.
 | A UAC is "Not covered" | No test title starts with `[UAC-n]`: add one |
 | Only HTML, no PDF | No Chromium or Chrome found: install one or set its path in `QA_REVIEW_CHROME` (the reason is in `report_errors`) |
 | "no task N on the agenticOS board" | Check the id with `aos board`; qa-review reads `~/.agenticos/data/board.db` |
+| Battery: "not a local host" | It only attacks local hosts by default. Pass `--attacks` (only on an environment you can dirty) or set `uac.attacks: always` |
+| Battery: "is not reachable" | The app is not running at the host, or not answering `GET /` |
+| Battery: "connection refused" mid-run | An earlier attack killed the server: that request is the bug; restart the app and look at its log |
+| A UAC shows "Broken" | A `@break` test failed: the attack succeeded. Fix the code, not the test |
+| The draft packet lists no existing tests | No test file calls the endpoint paths literally (e.g. the URL is built dynamically) |
 | "no test found" for a file that does have tests | The test's name does not mention the module. Rename it or ignore the warning (it is warn, not block) |
 
 ---
@@ -706,5 +780,9 @@ Design and decisions are in [DESIGN.md](DESIGN.md).
 - Code and tests are matched by file name: a test whose name does not mention the module is not matched (at
   most it gives a warn).
 - Schemathesis and the UAC tests need the application running at the host; qa-review does not start it.
+- The attack battery only knows the fields it can read from the code or the OpenAPI spec, and checks generic
+  invariants (5xx, leaks, XSS, hangs); business-level breaks come from the `@break` UACs the agent writes.
+- Existing tests are matched by the endpoint path written literally in the test; URLs built from variables or
+  helpers are not found.
 - The AI review depends on the agent doing it and sending it with `qa_submit_review`. In CI only the
   deterministic part runs.

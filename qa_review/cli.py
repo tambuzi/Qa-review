@@ -84,9 +84,12 @@ def cmd_uac(a) -> int:
         print(json.dumps(uac.show(root, a.slug), indent=1, ensure_ascii=False))
     elif a.action == "tests":
         print(uac.tests_packet(root, a.slug))
+    elif a.action == "iterate":
+        print(uac.iterate_packet(root, a.slug, a.run))
     else:
         if a.action == "run":
-            res = uac.run(root, a.slug, host=a.host, formats=a.format, allow_protected=a.allow_protected)
+            res = uac.run(root, a.slug, host=a.host, formats=a.format, allow_protected=a.allow_protected,
+                          attacks=a.attacks)
         else:
             res = uac.report_again(root, a.slug, a.run, a.format)
         c = res["counts"]
@@ -94,6 +97,15 @@ def cmd_uac(a) -> int:
               + "".join(f", {c[k]} {k.replace('_', ' ')}" for k in ("failed", "flaky", "skipped", "not_covered") if c[k]))
         for u in res["uacs"]:
             print(f"  {u['id']:<7} {u['status']:<12} {u['name']}")
+        rb = res.get("robustness") or {}
+        if rb:
+            bat = rb["battery"]
+            print(f"robustness: {rb['break_uacs']} adversarial UACs, {rb['held']} held, {rb['broken']} broke it"
+                  + (f"; battery {bat['cases']} attacks, {bat['broken']} broke it" if bat.get("ran")
+                     else f"; battery not run ({bat.get('reason')})")
+                  + (f"; gaps: {', '.join(rb['attack_gaps'])}" if rb.get("attack_gaps") else ""))
+            for line in rb.get("battery_breaks", [])[:10]:
+                print(f"  BROKE  {line}")
         for kind, path in res["report"].items():
             if kind != "pdf_method":
                 print(f"{kind}: {path}")
@@ -172,6 +184,12 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--host", help="URL to test (default: `host:` in .qa-review.yaml)")
     s.add_argument("--format", help="pdf, html or pdf,html (default: uac.report in .qa-review.yaml)")
     s.add_argument("--allow-protected", action="store_true")
+    s.add_argument("--attacks", action=argparse.BooleanOptionalAction, default=None,
+                   help="force the automatic attack battery on/off (default: uac.attacks, local hosts only)")
+    s = usub.add_parser("iterate", help="print the next-round packet: attack around what broke, cover the gaps")
+    s.add_argument("slug")
+    s.add_argument("path", nargs="?", default=".")
+    s.add_argument("--run", help="run id (default: latest)")
     s = usub.add_parser("report", help="re-create the report of a run in another format")
     s.add_argument("slug")
     s.add_argument("path", nargs="?", default=".")

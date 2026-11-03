@@ -25,7 +25,13 @@ LABELS = {
            "verdict": {"pass": "ACEPTADO", "fail": "NO ACEPTADO", "incomplete": "INCOMPLETO"},
            "st": {"passed": "Superado", "failed": "Fallido", "flaky": "Inestable", "skipped": "Omitido",
                   "not_covered": "Sin cubrir"},
-           "src": {"task": "tarea", "code": "código"}},
+           "src": {"task": "tarea", "code": "código", "tests": "tests existentes"},
+           "broken": "Roto", "robustness": "Robustez", "adversarial": "UAC adversariales",
+           "held": "resistieron", "broke": "lo rompieron", "battery": "Batería automática de ataques",
+           "battery_not_run": "No se ejecutó", "cases": "ataques", "endpoint": "Endpoint", "attack": "Ataque",
+           "category": "Categoría", "result": "Resultado", "coverage": "Cobertura del plan de ataque",
+           "gaps": "Sin UAC adversarial", "all_covered": "Todas las categorías del plan tienen al menos un UAC.",
+           "battery_ok": "Ningún ataque rompió el sistema.", "more_evidence": "evidencias más en"},
     "en": {"title": "Acceptance report", "project": "Project", "task": "Task", "host": "Host",
            "branch": "Branch / commit", "date": "Date", "run": "Run", "duration": "Duration",
            "summary": "Summary", "criteria": "Acceptance criteria", "status": "Status", "type": "Type",
@@ -36,7 +42,13 @@ LABELS = {
            "verdict": {"pass": "ACCEPTED", "fail": "NOT ACCEPTED", "incomplete": "INCOMPLETE"},
            "st": {"passed": "Passed", "failed": "Failed", "flaky": "Flaky", "skipped": "Skipped",
                   "not_covered": "Not covered"},
-           "src": {"task": "task", "code": "code"}},
+           "src": {"task": "task", "code": "code", "tests": "existing tests"},
+           "broken": "Broken", "robustness": "Robustness", "adversarial": "Adversarial UACs",
+           "held": "held", "broke": "broke it", "battery": "Automatic attack battery",
+           "battery_not_run": "Not run", "cases": "attacks", "endpoint": "Endpoint", "attack": "Attack",
+           "category": "Category", "result": "Result", "coverage": "Attack plan coverage",
+           "gaps": "No adversarial UAC", "all_covered": "Every category of the plan has at least one UAC.",
+           "battery_ok": "No attack broke the system.", "more_evidence": "more pieces of evidence in"},
 }
 
 CSS = """
@@ -78,6 +90,7 @@ figure{margin:10px 0;break-inside:avoid}
 figure img{max-width:100%;border:1px solid var(--line);border-radius:6px}
 figcaption{color:var(--muted);font-size:12px;margin-top:4px}
 .muted{color:var(--muted)}
+.bad{color:var(--fail);font-weight:600}
 footer{margin-top:40px;color:var(--muted);font-size:12px}
 @page{size:A4;margin:14mm 12mm}
 @media print{main{padding:0;max-width:none}.uac{break-before:page}.uac:first-of-type{break-before:auto}
@@ -148,13 +161,56 @@ def _test(t: dict, run_dir: Path, L: dict) -> str:
     atts = t.get("attachments", [])
     if any(a.get("name", "").startswith("shot:") for a in atts):   # the test took its own: skip the automatic one
         atts = [a for a in atts if a.get("name") != "screenshot"]
+    hidden = 0
+    if len(atts) > 8:                       # attack loops: the first attempts and the last (where it broke)
+        hidden = len(atts) - 6
+        atts = atts[:3] + atts[-3:]
     shown = [_attachment(a, run_dir, L) for a in atts]
     shown = [s for s in shown if s]
+    if hidden:
+        shown.insert(3, f'<p class="muted">… {hidden} {_e(L["more_evidence"])} <code>evidence/</code></p>')
     parts += shown or [f'<p class="muted">{_e(L["no_evidence"])}</p>']
     files = _files(t.get("attachments", []))
     if files:
         parts.append(f'<p class="muted">{_e(L["files"])}: ' + ", ".join(f"<code>{_e(f)}</code>" for f in files) + "</p>")
     parts.append("</div>")
+    return "".join(parts)
+
+
+def _status(u: dict, L: dict) -> str:
+    label = L["broken"] if u.get("breaks") and u["status"] == "failed" else L["st"][u["status"]]
+    return f'<span class="badge {u["status"]}">{_e(label)}</span>'
+
+
+def _robustness(run: dict, L: dict) -> str:
+    c, battery, cov = run["counts"], run.get("battery") or {}, run.get("coverage") or {}
+    if not c.get("break_total") and not battery and not cov:
+        return ""
+    parts = [f'<h2>{_e(L["robustness"])}</h2>',
+             (f'<p><b>{_e(L["adversarial"])}:</b> {c.get("break_total", 0)} · '
+              f'<span class="badge passed">{c.get("break_held", 0)} {_e(L["held"])}</span> '
+              f'<span class="badge failed">{c.get("break_broken", 0)} {_e(L["broke"])}</span></p>')]
+    if cov.get("planned"):
+        gaps = cov.get("gaps") or []
+        parts.append(f'<p><b>{_e(L["coverage"])}:</b> ' + " ".join(
+            f'<span class="badge {"skipped" if g in gaps else "passed"}">{_e(g)}</span>' for g in cov["planned"])
+            + (f' <span class="muted">{_e(L["gaps"])}: {_e(", ".join(gaps))}</span>' if gaps
+               else f' <span class="muted">{_e(L["all_covered"])}</span>') + "</p>")
+    parts.append(f'<h3>{_e(L["battery"])}</h3>')
+    if not battery.get("ran"):
+        parts.append(f'<p class="muted">{_e(L["battery_not_run"])}: {_e(battery.get("reason") or "")}</p>')
+        return "".join(parts)
+    hits = [r for r in battery.get("results", []) if r["broke"]]
+    parts.append(f'<p>{battery.get("endpoints", 0)} {_e(L["endpoint"]).lower()}(s) · {battery.get("cases", 0)} '
+                 f'{_e(L["cases"])} · <span class="badge {"failed" if hits else "passed"}">{len(hits)} {_e(L["broke"])}</span></p>')
+    if not hits:
+        return "".join(parts) + f'<p class="muted">{_e(L["battery_ok"])}</p>'
+    rows = "".join(f'<tr><td>{_e(r["endpoint"])}</td><td><code>{_e(r["category"])}</code></td><td>{_e(r["label"])}</td>'
+                   f'<td><span class="bad">{_e("; ".join(r["broke"]))}</span>'
+                   + (f'<pre>{_e(r["response"][:400])}</pre>' if r.get("response") else "") + "</td></tr>"
+                   for r in hits[:60])
+    parts.append(f'<table><thead><tr><th>{_e(L["endpoint"])}</th><th>{_e(L["category"])}</th><th>{_e(L["attack"])}</th>'
+                 f'<th>{_e(L["result"])}</th></tr></thead><tbody>{rows}</tbody></table>')
     return "".join(parts)
 
 
@@ -173,14 +229,15 @@ def html_report(run: dict, language: str = "en") -> str:
     for u in run["uacs"]:
         src = L["src"].get(u.get("source") or "", u.get("source") or "")
         rows.append(f'<tr><td class="id"><a href="#{_e(u["id"])}">{_e(u["id"])}</a></td><td>{_e(u["name"])}</td>'
-                    f'<td>{_e(", ".join(u["kinds"]))}</td><td>{_e(src)}</td><td>{_e(u.get("ref") or "")}</td>'
-                    f'<td>{len(u["tests"])}</td><td><span class="badge {u["status"]}">{_e(L["st"][u["status"]])}</span></td></tr>')
+                    f'<td>{_e(", ".join(u["kinds"] + [f"break:{b}" for b in u.get("breaks", [])]))}</td>'
+                    f'<td>{_e(src)}</td><td>{_e(u.get("ref") or "")}</td>'
+                    f'<td>{len(u["tests"])}</td><td>{_status(u, L)}</td></tr>')
     sections = []
     for u in run["uacs"]:
         body = "".join(_test(t, run_dir, L) for t in u["tests"]) or f'<p class="muted">{_e(L["no_tests"])}</p>'
         sections.append(
             f'<section class="uac" id="{_e(u["id"])}"><header><h3>{_e(u["id"])} · {_e(u["name"])}</h3>'
-            f'<span class="badge {u["status"]}">{_e(L["st"][u["status"]])}</span></header>'
+            f'{_status(u, L)}</header>'
             f'<pre class="gherkin">{_gherkin(u["text"])}</pre><h3>{_e(L["evidence"])}</h3>{body}</section>')
     orphans = ""
     if run.get("orphans"):
@@ -197,6 +254,7 @@ def html_report(run: dict, language: str = "en") -> str:
 <h2>{_e(L["summary"])}</h2>
 <table><thead><tr><th>UAC</th><th>{_e(L["criteria"])}</th><th>{_e(L["type"])}</th><th>{_e(L["source"])}</th>
 <th>{_e(L["ref"])}</th><th>{_e(L["tests"])}</th><th>{_e(L["status"])}</th></tr></thead><tbody>{"".join(rows)}</tbody></table>
+{_robustness(run, L)}
 <h2>{_e(L["criteria"])}</h2>{"".join(sections)}{orphans}
 <h2>{_e(L["appendix"])}</h2><p><b>{_e(L["command"])}:</b> <code>{_e(run.get("command"))}</code></p>
 <pre>{_e(chr(10).join((run.get("output_tail") or "").splitlines()[-30:]))}</pre>

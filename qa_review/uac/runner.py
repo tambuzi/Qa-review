@@ -12,10 +12,10 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
-from .. import target
+from .. import gitdiff, target
 from ..checks import Check, _tool, run_one
 from ..config import load as load_config
-from . import gherkin, store
+from . import attacks, baseline, gherkin, store, surface
 
 _ID_IN_TITLE = re.compile(r"\bUAC-(\d+)\b", re.IGNORECASE)
 _EXT = {"image/png": "png", "image/jpeg": "jpg", "application/json": "json", "text/plain": "txt",
@@ -125,15 +125,27 @@ def summarize(feature: gherkin.Feature, tests: list[dict]) -> tuple[list[dict], 
         known.add(uid)
         linked = [t for t in tests if uid in t["uacs"]]
         uacs.append({"id": uid, "name": sc.name, "kinds": sc.kinds, "source": sc.tag_value("source"),
-                     "ref": sc.tag_value("ref"), "text": sc.text, "status": _uac_status(linked), "tests": linked})
+                     "ref": sc.tag_value("ref"), "breaks": sc.breaks, "text": sc.text,
+                     "status": _uac_status(linked), "tests": linked})
     orphans = [t for t in tests if not t["uacs"] or not set(t["uacs"]) & known]
     counts = {s: sum(1 for u in uacs if u["status"] == s) for s in STATUSES}
     counts["total"] = len(uacs)
+    adversarial = [u for u in uacs if u["breaks"]]
+    counts["break_total"] = len(adversarial)
+    counts["break_held"] = sum(1 for u in adversarial if u["status"] == "passed")
+    counts["break_broken"] = sum(1 for u in adversarial if u["status"] == "failed")
     return uacs, orphans, counts
 
 
-def verdict(counts: dict) -> str:
-    if counts.get("failed"):
+def coverage(uacs: list[dict], plan: list[dict]) -> dict:
+    """Which categories of the attack plan have at least one @break UAC, and which are gaps."""
+    covered = sorted({c for u in uacs for c in u["breaks"]})
+    planned = sorted({r["category"] for r in plan})
+    return {"planned": planned, "covered": covered, "gaps": [c for c in planned if c not in covered]}
+
+
+def verdict(counts: dict, battery: dict | None = None) -> str:
+    if counts.get("failed") or (battery or {}).get("broken"):
         return "fail"
     if counts.get("not_covered") or counts.get("skipped") or counts.get("flaky"):
         return "incomplete"
@@ -141,7 +153,7 @@ def verdict(counts: dict) -> str:
 
 
 def run(root: Path, slug: str, host: str | None = None, allow_protected: bool = False,
-        task_ref: str | None = None) -> dict:
+        task_ref: str | None = None, attacks_on: bool | None = None) -> dict:
     cfg = load_config(root)
     st = store.settings(cfg.root)
     slug = store.slugify(slug)
@@ -178,6 +190,22 @@ def run(root: Path, slug: str, host: str | None = None, allow_protected: bool = 
     task_ref = task_ref or next((t.split(":", 1)[1] for t in feature.tags if t.lower().startswith("@task:")), None)
     tests = parse_results(json.loads(json_path.read_text(encoding="utf-8")), run_dir)
     uacs, orphans, counts = summarize(feature, tests)
+
+    # the attack surface, and the automatic battery (after the tests, so it cannot disturb their data)
+    try:
+        changes = gitdiff.collect(cfg.root, cfg.base)
+    except gitdiff.GitError:
+        changes = None
+    spec = (cfg.qa.get("openapi") or {}).get("spec") if isinstance(cfg.qa.get("openapi"), dict) else None
+    eps = surface.surface(cfg.root, changes, spec) if changes else []
+    has_ui = bool(changes) and any(surface.sources.is_ui_file(f.path) for f in changes.files if f.status != "deleted")
+    plan = attacks.plan(eps, has_ui)
+    go, why = baseline.should_run(host, st.attacks, attacks_on)
+    if go and eps:
+        battery = baseline.run(host, eps, timeout=st.attack_timeout_sec)
+    else:
+        battery = {"ran": False, "reason": why if not go else "no HTTP endpoints in the change",
+                   "endpoints": len(eps), "cases": 0, "broken": 0, "results": []}
     dirty = bool(_git(cfg.root, "status", "--porcelain"))
     data = {
         "id": run_id, "slug": slug, "feature": feature.name, "description": feature.description,
@@ -186,7 +214,8 @@ def run(root: Path, slug: str, host: str | None = None, allow_protected: bool = 
         "commit": _git(cfg.root, "rev-parse", "--short", "HEAD") + (" (+ uncommitted changes)" if dirty else ""),
         "project": cfg.root.name, "command": cmd, "exit_code": result.exit_code,
         "duration_sec": result.duration_sec, "output_tail": result.output[-4000:],
-        "counts": counts, "verdict": verdict(counts), "uacs": uacs, "orphans": orphans,
+        "counts": counts, "verdict": verdict(counts, battery), "uacs": uacs, "orphans": orphans,
+        "surface": eps, "attack_plan": plan, "coverage": coverage(uacs, plan), "battery": battery,
         "run_dir": str(run_dir),
     }
     (run_dir / "run.json").write_text(json.dumps(data, indent=1, ensure_ascii=False), encoding="utf-8")

@@ -32,7 +32,16 @@ _ROUTE_PATTERNS = [
     re.compile(r"@(Get|Post|Put|Patch|Delete)(?:Mapping)?\(\s*[\"']?([^\"')]*)"),                     # Nest/Spring
     re.compile(r"\bpath\(\s*[\"']([^\"']*)[\"']"),                                                    # Django
 ]
-_PAGE_DIRS = re.compile(r"(^|/)(pages|app|views|templates|routes|screens|components)/")
+_UI_EXT = (".tsx", ".jsx", ".vue", ".svelte", ".html", ".htm", ".twig", ".erb", ".hbs", ".ejs", ".pug", ".njk",
+           ".blade.php", ".astro")
+_UI_DIRS = re.compile(r"(^|/)(pages|views|templates|screens|components)/")
+_BACKEND_EXT = (".py", ".go", ".java", ".kt", ".rb", ".rs", ".cs")
+
+
+def is_ui_file(path: str) -> bool:
+    """A file that renders UI: by extension, or inside a UI folder unless it is backend code."""
+    p = path.lower()
+    return p.endswith(_UI_EXT) or (bool(_UI_DIRS.search(p)) and not p.endswith(_BACKEND_EXT))
 
 
 class SourceError(ValueError):
@@ -146,7 +155,7 @@ def code_signals(changes) -> dict:
     for f in changes.files:
         if f.status == "deleted":
             continue
-        if _PAGE_DIRS.search(f.path):
+        if is_ui_file(f.path):
             pages.append(f.path)
         for n, line in f.added:
             for rx in _ROUTE_PATTERNS:

@@ -52,6 +52,11 @@ class Scenario:
     def kinds(self) -> list[str]:
         return [t[1:].lower() for t in self.tags if t[1:].lower() in KINDS]
 
+    @property
+    def breaks(self) -> list[str]:
+        """Attack categories of an adversarial UAC (@break:<category>); empty for a functional one."""
+        return [t.split(":", 1)[1].lower() for t in self.tags if t.lower().startswith("@break:")]
+
     def tag_value(self, prefix: str) -> str | None:
         for t in self.tags:
             if t.lower().startswith(f"@{prefix}:"):
@@ -60,7 +65,8 @@ class Scenario:
 
     def to_dict(self) -> dict:
         d = asdict(self)
-        d.update(id=self.uac_id, kinds=self.kinds, source=self.tag_value("source"), ref=self.tag_value("ref"))
+        d.update(id=self.uac_id, kinds=self.kinds, source=self.tag_value("source"), ref=self.tag_value("ref"),
+                 breaks=self.breaks)
         return d
 
 
@@ -194,6 +200,11 @@ def validate(feature: Feature) -> list[str]:
             problems.append(f"{where}: needs at least one When and one Then")
         if not s.name:
             problems.append(f"{where}: give the scenario a name")
+        from .attacks import CATEGORIES
+        unknown = [b for b in s.breaks if b not in CATEGORIES]
+        if unknown:
+            problems.append(f"{where}: unknown @break category {', '.join(unknown)} "
+                            f"(use {', '.join(CATEGORIES)})")
     return problems
 
 

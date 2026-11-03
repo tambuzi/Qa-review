@@ -23,6 +23,8 @@ class UacSettings:
     report: list[str] = field(default_factory=lambda: ["pdf", "html"])
     output_dir: str = ".qa-review/uac"           # runs, results and reports
     language: str = "en"                         # language of the UACs and the report (en | es)
+    attacks: str = "local"                       # automatic battery: local (local hosts only) | always | off
+    attack_timeout_sec: float = 10               # per request of the automatic battery
 
 
 def settings(root: Path) -> UacSettings:
@@ -32,6 +34,11 @@ def settings(root: Path) -> UacSettings:
         data = (yaml.safe_load(p.read_text(encoding="utf-8")) or {}).get("uac") or {}
     s = UacSettings(**{k: v for k, v in data.items() if k in UacSettings.__dataclass_fields__})
     s.report = parse_formats(s.report)
+    if isinstance(s.attacks, bool):                   # YAML reads `off`/`on` as booleans
+        s.attacks = "always" if s.attacks else "off"
+    s.attacks = str(s.attacks).lower()
+    if s.attacks not in ("local", "always", "off"):
+        raise ValueError(f"uac.attacks must be local, always or off, not {s.attacks!r}")
     return s
 
 

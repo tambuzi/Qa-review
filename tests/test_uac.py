@@ -162,10 +162,14 @@ def test_code_signals(repo):
     (repo / "web" / "routes.js").write_text("app.get('/cart', handler)\n")
     (repo / "routes").mkdir()
     (repo / "routes" / "web.php").write_text("Route::delete('/cart/{id}', [CartController::class, 'destroy']);\n")
+    (repo / "resources" / "views").mkdir(parents=True)
+    (repo / "resources" / "views" / "cart.blade.php").write_text("<div>{{ $total }}</div>\n")
     sig = sources.code_signals(gitdiff.collect(repo))
     got = {(e["method"], e["path"]) for e in sig["endpoints"]}
     assert {("POST", "/cart/discount"), ("GET", "/cart"), ("DELETE", "/cart/{id}")} <= got
-    assert "routes/web.php" in sig["pages"]
+    assert sig["pages"] == ["resources/views/cart.blade.php"]          # routes and app/*.py are backend
+    assert sources.is_ui_file("src/components/Cart.tsx") and sources.is_ui_file("app/page.tsx")
+    assert not sources.is_ui_file("app/api.py") and not sources.is_ui_file("routes/web.php")
 
 
 # ---------------------------------------------------------------- store and packets
