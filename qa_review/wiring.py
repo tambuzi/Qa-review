@@ -26,6 +26,9 @@ CONFIG_TEMPLATE = """\
 #   graphskill: auto   # auto | off | "<command>", e.g. "/path/to/venv/bin/python -m graphskill"
 #   agenticos: auto    # auto | off
 # timeout_sec: 600
+# host: http://localhost:8000      # default target; override per run with --host
+# host_env: [BASE_URL]             # env vars that receive the host (QA_REVIEW_HOST is always set)
+# protected_hosts: [miapp.com]     # production: only with --allow-protected
 """
 
 SKILL = """\

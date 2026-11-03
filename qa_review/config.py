@@ -47,6 +47,9 @@ class Config:
     review_rules: list[str] = field(default_factory=list)
     integrations: dict = field(default_factory=lambda: {"graphskill": "auto", "agenticos": "auto"})
     timeout_sec: int = 600
+    host: str | None = None                       # default target for the tests
+    host_env: list[str] = field(default_factory=lambda: ["BASE_URL"])
+    protected_hosts: list[str] = field(default_factory=list)
 
     @property
     def state_dir(self) -> Path:
@@ -81,4 +84,7 @@ def load(root: str | Path) -> Config:
     integrations.update({k: str(v) for k, v in (data.get("integrations") or {}).items()})
     return Config(root=root, base=data.get("base"), checks=checks, qa=data.get("qa") or {},
                   review_rules=[str(r) for r in ((data.get("review") or {}).get("rules") or [])],
-                  integrations=integrations, timeout_sec=int(data.get("timeout_sec", 600)))
+                  integrations=integrations, timeout_sec=int(data.get("timeout_sec", 600)),
+                  host=data.get("host") or None,
+                  host_env=[str(n) for n in (data.get("host_env") or ["BASE_URL"])],
+                  protected_hosts=[str(p) for p in (data.get("protected_hosts") or [])])

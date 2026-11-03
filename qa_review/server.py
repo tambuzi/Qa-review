@@ -25,6 +25,7 @@ def _summary(run: dict) -> dict:
         "verdict": run["verdict"],
         "reasons": run["reasons"],
         "base": run["base_label"],
+        "host": run.get("host"),
         "stats": run["stats"],
         "checks": [{k: c[k] for k in ("name", "kind", "status", "blocking", "duration_sec", "cmd")}
                    | ({"output_tail": "\n".join(c["output"].splitlines()[-15:])}
@@ -56,14 +57,19 @@ def build(default_root: Path) -> FastMCP:
         return {"root": str(cfg.root), "config": (cfg.root / ".qa-review.yaml").exists(),
                 "checks": [{"name": c.name, "kind": c.kind, "cmd": c.cmd, "blocking": c.blocking, "source": c.source}
                            for c in planned + qa_checks],
-                "notes": notes, "integrations": engine.integrations_status(cfg)}
+                "notes": notes, "integrations": engine.integrations_status(cfg),
+                "default_host": cfg.host, "host_env": cfg.host_env, "protected_hosts": cfg.protected_hosts}
 
     @mcp.tool()
     def qa_run(base: str | None = None, level: str = "full", paths: list[str] | None = None,
-               only: list[str] | None = None, project: str | None = None) -> dict:
+               only: list[str] | None = None, host: str | None = None, allow_protected: bool = False,
+               project: str | None = None) -> dict:
         """Run QA on the current change: security rules, impact, checks/tests, e2e/API. level=quick runs
-        only tests related to the change and skips e2e. base defaults to the merge-base with main."""
-        return _summary(engine.run(root_of(project), base=base, level=level, paths=paths, only=only))
+        only tests related to the change and skips e2e. base defaults to the merge-base with main.
+        host: URL the tests target (e.g. https://staging.example.com); only=["e2e","api"] to run just those.
+        Never set allow_protected unless the user explicitly asked to test that protected host."""
+        return _summary(engine.run(root_of(project), base=base, level=level, paths=paths, only=only,
+                                   host=host, allow_protected=allow_protected))
 
     @mcp.tool()
     def qa_review_packet(run_id: str | None = None, max_diff_chars: int = 60000, project: str | None = None) -> str:

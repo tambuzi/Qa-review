@@ -20,7 +20,7 @@ def find_spec(root: Path) -> str | None:
     return None
 
 
-def plan(cfg: Config) -> tuple[list[Check], list[str]]:
+def plan(cfg: Config, host: str | None = None) -> tuple[list[Check], list[str]]:
     """(checks, notes). Notes explain what could be enabled and how."""
     root, qa = cfg.root, cfg.qa or {}
     checks, notes = [], []
@@ -37,12 +37,15 @@ def plan(cfg: Config) -> tuple[list[Check], list[str]]:
             notes.append("Playwright config found but Playwright is not installed: npm i -D @playwright/test")
 
     api = qa.get("openapi")
+    if isinstance(api, dict) and api.get("spec") and not api.get("base_url") and not api.get("cmd"):
+        api = {**api, "base_url": "{host}"}          # no fixed URL: test whatever host the run targets
     if isinstance(api, dict) and (api.get("cmd") or (api.get("spec") and api.get("base_url"))):
         if api.get("cmd"):
             cmd = api["cmd"]
         else:
             exe = _tool(root, "schemathesis") or _tool(root, "st")
-            cmd = f"{exe} run {api['spec']} --url {api['base_url']}" if exe else None
+            url = "{host}" if host else api["base_url"]   # an explicit host wins over the configured URL
+            cmd = f"{exe} run {api['spec']} --url {url}" if exe else None
             if not exe:
                 notes.append("openapi configured but Schemathesis is not installed: pip install schemathesis")
         if cmd:

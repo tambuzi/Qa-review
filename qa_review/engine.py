@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import checks as checks_mod
-from . import gitdiff, report, security
+from . import gitdiff, report, security, target
 from . import impact as impact_mod
 from . import qa as qa_mod
 from .config import Config, load
@@ -64,10 +64,15 @@ def integrations_status(cfg: Config) -> dict:
 
 
 def run(root: str | Path, base: str | None = None, level: str = "full", paths: list[str] | None = None,
-        skip_checks: bool = False, only: list[str] | None = None) -> dict:
+        skip_checks: bool = False, only: list[str] | None = None, host: str | None = None,
+        allow_protected: bool = False) -> dict:
     if level not in LEVELS:
         raise ValueError(f"level must be one of {LEVELS}")
     cfg = load(root)
+    host = target.normalize(host or cfg.host) if (host or cfg.host) else None
+    if host and target.is_protected(host, cfg.protected_hosts) and not allow_protected:
+        raise target.HostError(f"{host} is a protected host (protected_hosts in .qa-review.yaml); "
+                               "re-run with allow_protected / --allow-protected if you really mean it")
     started = time.monotonic()
     changes = gitdiff.collect(cfg.root, base or cfg.base, paths)
     run_id = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")[:-3] + "-" + secrets.token_hex(2)
@@ -75,7 +80,7 @@ def run(root: str | Path, base: str | None = None, level: str = "full", paths: l
     imp = impact_mod.analyse(cfg.root, changes, cfg.integrations.get("graphskill", "auto"))
 
     planned = checks_mod.plan(cfg)
-    qa_checks, qa_notes = qa_mod.plan(cfg)
+    qa_checks, qa_notes = qa_mod.plan(cfg, host)
     if level == "full":
         planned += qa_checks
     elif qa_checks:
@@ -87,7 +92,8 @@ def run(root: str | Path, base: str | None = None, level: str = "full", paths: l
             code = [f.path for f in changes.files if f.status != "deleted" and security.is_code(f.path)]
             targets = {"tests": imp.tests, "lint": code}
             targets = {k: v for k, v in targets.items() if v}
-        results = [r.to_dict() for r in checks_mod.run_all(planned, cfg.root, cfg.timeout_sec, targets, only)]
+        results = [r.to_dict() for r in checks_mod.run_all(planned, cfg.root, cfg.timeout_sec, targets, only,
+                                                            host, target.env_for(host, cfg.host_env))]
     if not planned and not cfg.checks:
         qa_notes.append("no checks detected: add a `checks:` list to .qa-review.yaml (lint, tests...)")
 
@@ -96,6 +102,7 @@ def run(root: str | Path, base: str | None = None, level: str = "full", paths: l
         "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "root": str(cfg.root),
         "level": level,
+        "host": host,
         "base": changes.base,
         "base_label": changes.base_label,
         "stats": changes.stats(),

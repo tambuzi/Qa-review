@@ -56,6 +56,8 @@ def markdown(run: dict) -> str:
     lines = [f"# qa-review {_ICON.get(v, '')} {v.upper()}", "",
              (f"Base: `{run.get('base_label')}` · {s.get('files', 0)} files, "
               f"+{s.get('added', 0)} / -{s.get('removed', 0)} · run `{run.get('id')}`"), ""]
+    if run.get("host"):
+        lines[-1:-1] = [f"Target host: `{run['host']}`"]
     if reasons:
         lines += ["## Why", *[f"- {r}" for r in reasons], ""]
     if run.get("checks"):

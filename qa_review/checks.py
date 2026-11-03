@@ -13,6 +13,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from . import target
 from .config import Check, Config
 
 
@@ -96,15 +97,21 @@ def _tail(text: str, lines: int = 60) -> str:
     return "\n".join(text.strip().splitlines()[-lines:])
 
 
-def run_one(check: Check, root: Path, timeout_sec: int, targets: list[str] | None = None) -> CheckResult:
+def run_one(check: Check, root: Path, timeout_sec: int, targets: list[str] | None = None,
+            host: str | None = None, env: dict[str, str] | None = None) -> CheckResult:
     cmd, targeted = check.cmd, False
     if targets and check.targeted_cmd:
         cmd = check.targeted_cmd.replace("{targets}", " ".join(shlex.quote(t) for t in targets))
         targeted = True
+    if target.needs_host(cmd) and not host:
+        return CheckResult(check.name, check.kind, cmd, "skipped", check.blocking,
+                           output="needs a host: pass --host (or set `host:` in .qa-review.yaml)", targeted=targeted)
+    cmd = target.apply(cmd, host)
     start = time.monotonic()
     try:
         proc = subprocess.Popen(cmd, shell=True, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                stdin=subprocess.DEVNULL, text=True, start_new_session=True)
+                                stdin=subprocess.DEVNULL, text=True, start_new_session=True,
+                                env={**os.environ, **(env or {})})
     except OSError as e:
         return CheckResult(check.name, check.kind, cmd, "error", check.blocking, output=str(e), targeted=targeted)
     try:
@@ -130,11 +137,12 @@ def run_one(check: Check, root: Path, timeout_sec: int, targets: list[str] | Non
 
 
 def run_all(checks: list[Check], root: Path, timeout_sec: int, targets: dict[str, list[str]] | None = None,
-            only: list[str] | None = None) -> list[CheckResult]:
+            only: list[str] | None = None, host: str | None = None,
+            env: dict[str, str] | None = None) -> list[CheckResult]:
     """`targets` maps a check kind (e.g. "tests", "lint") to the files to limit it to."""
     results = []
     for c in checks:
         if only and c.name not in only and c.kind not in only:
             continue
-        results.append(run_one(c, root, timeout_sec, (targets or {}).get(c.kind)))
+        results.append(run_one(c, root, timeout_sec, (targets or {}).get(c.kind), host, env))
     return results

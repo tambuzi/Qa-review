@@ -16,7 +16,9 @@ EXIT_PASS, EXIT_FAIL, EXIT_ERROR = 0, 1, 2
 
 
 def cmd_run(a) -> int:
-    run = engine.run(a.path, base=a.base, level=a.level, skip_checks=a.no_checks)
+    only = [x.strip() for x in a.only.split(",") if x.strip()] if a.only else None
+    run = engine.run(a.path, base=a.base, level=a.level, skip_checks=a.no_checks, only=only,
+                     host=a.host, allow_protected=a.allow_protected)
     print(json.dumps(run, indent=1, default=str) if a.format == "json" else report.markdown(run))
     failing = {"block"} if a.fail_on == "block" else {"block", "warn"}
     return EXIT_FAIL if run["verdict"] in failing else EXIT_PASS
@@ -35,7 +37,10 @@ def cmd_status(a) -> int:
     cfg = load(a.path)
     print(f"project: {cfg.root}")
     print(f"config:  {'.qa-review.yaml' if (cfg.root / '.qa-review.yaml').exists() else '(none, auto-detect)'}")
-    qa_checks, notes = qa.plan(cfg)
+    qa_checks, notes = qa.plan(cfg, cfg.host)
+    print(f"host:    {cfg.host or '(none; pass --host)'}  -> env {', '.join(cfg.host_env)}, QA_REVIEW_HOST")
+    if cfg.protected_hosts:
+        print(f"protected hosts: {', '.join(cfg.protected_hosts)}")
     for c in plan(cfg) + qa_checks:
         print(f"  [{c.kind:6}] {c.name:14} {'blocking' if c.blocking else 'warn    '}  {c.cmd}")
     for n in notes:
@@ -77,6 +82,9 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--fail-on", choices=("block", "warn"), default="block", help="exit 1 on this verdict or worse")
     s.add_argument("--ci", action="store_true", help="CI mode (same as default flags; kept for clarity)")
     s.add_argument("--no-checks", action="store_true", help="only security rules and impact")
+    s.add_argument("--host", help="URL the tests target, e.g. https://staging.example.com or localhost:8000")
+    s.add_argument("--only", help="comma-separated check names or kinds, e.g. e2e,api")
+    s.add_argument("--allow-protected", action="store_true", help="allow a host listed in protected_hosts")
     s.set_defaults(fn=cmd_run)
 
     s = sub.add_parser("serve", help="run the MCP server over stdio for one project")

@@ -61,6 +61,68 @@ Dos ideas clave:
   una rama de feature revisa toda la rama (commiteado o no, incluidos archivos nuevos sin trackear). En la propia
   rama `main`/`master` revisa solo lo no commiteado.
 
+### Ejemplo real, paso a paso
+
+**El caso:** en un proyecto Python con API y tests (FastAPI + pytest + Playwright), Alejandro pide a Claude
+Code: *"añade un descuento opcional al total del carrito"*. Claude cambia `app/pricing.py` (`total()` ahora
+acepta `discount`) y añade un test.
+
+**1. Antes de decir "hecho", el agente lanza QA rápida** (lo hace solo, por la skill):
+
+```
+qa_run(level="quick")
+```
+
+qa-review calcula el cambio (rama `feature/discount` contra `main`), pasa las reglas de seguridad y pregunta
+a graphskill quién llama a `total()`: aparecen `checkout()` en `app/cart.py` e `invoice()` en
+`app/billing/invoice.py`. Con eso decide qué tests ejecutar: `tests/test_pricing.py` y `tests/test_cart.py`,
+no los 400 del proyecto. Resultado:
+
+```
+verdict: block
+- check `pytest` fail     → test_cart.py::test_checkout_total  (esperaba 50, recibió 45)
+```
+
+Sin el análisis de impacto, ese test no se habría ejecutado: no prueba `pricing.py` directamente, sino a
+uno de sus callers.
+
+**2. El agente arregla y repite.** `checkout()` pasaba un argumento por posición que ahora caía en
+`discount`. Lo corrige y vuelve a lanzar `qa_run(level="quick")`: los tests pasan.
+
+**3. QA completa contra staging**, antes de abrir el PR:
+
+```
+qa_run(level="full", host="staging.miapp.com")
+```
+
+Los tests unitarios corren en local. Playwright recibe `BASE_URL=https://staging.miapp.com` y Schemathesis
+dispara cientos de peticiones contra el `swagger.yml` de ese host. Todo pasa.
+
+**4. Review independiente.** El agente pide `qa_review_packet()` y se lo pasa a un subagente limpio. El paquete
+lleva el diff, los callers de `total()`, las reglas del proyecto y una lección de agenticOS: *"importes siempre
+en céntimos enteros"*. El reviewer devuelve:
+
+```
+qa_submit_review(verdict="warn", summary="Correcto; el descuento no se limita",
+  findings=[{severity: "medium", title: "Un descuento mayor que el total da negativo",
+             file: "app/pricing.py", line: 6}])
+```
+
+**5. Arreglo final y cierre.** El agente añade `max(0, …)` con su test y repite `qa_run`. Después la review
+sale `pass` y comparte el `qa_report`:
+
+```
+qa-review ✅ PASS · Target host: https://staging.miapp.com
+Checks: pytest ✅ · ruff ✅ · playwright ✅ · schemathesis ✅
+Review: pass — descuento acotado y con test
+```
+
+**6. En el PR**, GitHub Actions repite la parte determinista (`qa-review run`) y bloquea el merge si algo
+vuelve a romperse.
+
+Si alguien pidiera `host="miapp.com"` (producción, en `protected_hosts`), qa-review se negaría salvo que tú
+autorizases `allow_protected` de forma explícita.
+
 ---
 
 ## 2. Requisitos
@@ -175,6 +237,7 @@ qa-review run --base develop          # comparar contra otra rama o commit
 qa-review run --no-checks             # solo reglas de seguridad + impacto (segundos)
 qa-review run --format json           # salida para máquinas
 qa-review run --fail-on warn          # más estricto: también falla con warn
+qa-review run --host staging.miapp.com --only e2e,api   # contra otro entorno (ver abajo)
 qa-review packet                      # paquete de review del último run (para pegarlo a un agente)
 qa-review report                      # informe del último run
 qa-review report --run <id> --format json
@@ -182,6 +245,35 @@ qa-review serve                       # servidor MCP por stdio (lo arranca tu ID
 ```
 
 Todos aceptan una ruta al proyecto como primer argumento (por defecto, el directorio actual).
+
+### Apuntar las pruebas a un host
+
+Con `--host` (o `host` en `qa_run`) eliges contra qué entorno corren las pruebas, sin tocar la configuración:
+
+```bash
+qa-review run --host localhost:8000                    # tu máquina   → http://localhost:8000
+qa-review run --host app:8080                          # servicio de docker compose → http://app:8080
+qa-review run --host staging.miapp.com --only e2e,api  # staging, solo e2e y API → https://staging.miapp.com
+```
+
+Cada check recibe el host de dos formas:
+
+- **Variables de entorno:** `BASE_URL` (configurable con `host_env`) y siempre `QA_REVIEW_HOST`. Es lo que
+  leen Playwright (`use: { baseURL: process.env.BASE_URL }` en `playwright.config`), los tests de API
+  y tus scripts.
+- **`{host}` dentro del comando**, ya escapado para la shell: `cmd: "curl -fsS {host}/health"`. Si un check usa
+  `{host}` y no se pasa ninguno, sale `skipped` en vez de fallar.
+
+Schemathesis usa el host como `--url` (y el host de la ejecución gana sobre el `base_url` configurado).
+
+Reglas:
+
+- Sin esquema, se completa solo: `http://` para `localhost`, IPs internas, nombres sin punto (servicios de
+  docker), `.local` y `.test`; `https://` para el resto.
+- Solo se aceptan URLs `http(s)` sin caracteres de shell; cualquier otra cosa da error (código 2).
+- **Hosts protegidos (producción):** lista `protected_hosts` en `.qa-review.yaml`. Un host protegido (o un
+  subdominio suyo) solo se ejecuta con `--allow-protected`. El agente tiene instrucciones de no usarlo nunca
+  si no se lo pides tú expresamente.
 
 **Códigos de salida de `run`:** `0` pass o warn · `1` block (o warn con `--fail-on warn`) · `2` error
 (no es un repo git, configuración inválida…).
@@ -232,6 +324,11 @@ integrations:
 
 # Tiempo máximo por check, en segundos
 timeout_sec: 600
+
+# Host por defecto de las pruebas (se puede cambiar en cada ejecución con --host)
+host: http://localhost:8000
+host_env: [BASE_URL, API_URL]     # variables que reciben el host (QA_REVIEW_HOST siempre)
+protected_hosts: [miapp.com]      # producción: solo con --allow-protected
 ```
 
 **Niveles:**
@@ -396,7 +493,7 @@ Todas aceptan `project` (ruta) para trabajar sobre otro proyecto distinto del qu
 | Herramienta | Parámetros | Devuelve |
 |---|---|---|
 | `qa_status` | — | Checks que se ejecutarían, sugerencias, estado de las integraciones |
-| `qa_run` | `base`, `level` (`quick`/`full`), `paths`, `only` (nombres o tipos de check) | Resumen: `run_id`, veredicto, motivos, checks (con la salida de los que fallan), alertas, impacto y siguiente paso |
+| `qa_run` | `base`, `level` (`quick`/`full`), `paths`, `only` (nombres o tipos de check), `host`, `allow_protected` | Resumen: `run_id`, veredicto, motivos, checks (con la salida de los que fallan), alertas, impacto y siguiente paso |
 | `qa_review_packet` | `run_id` (por defecto el último), `max_diff_chars` | Texto con checklist, reglas, lecciones, alertas, checks fallidos, impacto y diff |
 | `qa_submit_review` | `run_id`, `verdict` (`pass`/`warn`/`block`), `summary`, `findings`, `cleared_rules`, `reviewer` | Veredicto actualizado |
 | `qa_report` | `run_id`, `format` (`markdown`/`json`) | Informe completo |
