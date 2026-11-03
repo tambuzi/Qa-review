@@ -31,7 +31,9 @@ LABELS = {
            "battery_not_run": "No se ejecutó", "cases": "ataques", "endpoint": "Endpoint", "attack": "Ataque",
            "category": "Categoría", "result": "Resultado", "coverage": "Cobertura del plan de ataque",
            "gaps": "Sin UAC adversarial", "all_covered": "Todas las categorías del plan tienen al menos un UAC.",
-           "battery_ok": "Ningún ataque rompió el sistema.", "more_evidence": "evidencias más en"},
+           "battery_ok": "Ningún ataque rompió el sistema.", "more_evidence": "evidencias más en",
+           "proposed": "propuesto", "not_met": "No cumplido",
+           "proposals": "propuestas fuera del veredicto", "proposal": "propuesta fuera del veredicto", "not_met_n": "no cumplidas", "na": "no aplica"},
     "en": {"title": "Acceptance report", "project": "Project", "task": "Task", "host": "Host",
            "branch": "Branch / commit", "date": "Date", "run": "Run", "duration": "Duration",
            "summary": "Summary", "criteria": "Acceptance criteria", "status": "Status", "type": "Type",
@@ -48,7 +50,9 @@ LABELS = {
            "battery_not_run": "Not run", "cases": "attacks", "endpoint": "Endpoint", "attack": "Attack",
            "category": "Category", "result": "Result", "coverage": "Attack plan coverage",
            "gaps": "No adversarial UAC", "all_covered": "Every category of the plan has at least one UAC.",
-           "battery_ok": "No attack broke the system.", "more_evidence": "more pieces of evidence in"},
+           "battery_ok": "No attack broke the system.", "more_evidence": "more pieces of evidence in",
+           "proposed": "proposed", "not_met": "Not met",
+           "proposals": "proposals outside the verdict", "proposal": "proposal outside the verdict", "not_met_n": "not met", "na": "not applicable"},
 }
 
 CSS = """
@@ -178,6 +182,8 @@ def _test(t: dict, run_dir: Path, L: dict) -> str:
 
 
 def _status(u: dict, L: dict) -> str:
+    if u.get("proposed") and u["status"] == "failed":          # a proposal, not a defect: outside the verdict
+        return f'<span class="badge flaky">{_e(L["not_met"])}</span>'
     label = L["broken"] if u.get("breaks") and u["status"] == "failed" else L["st"][u["status"]]
     return f'<span class="badge {u["status"]}">{_e(label)}</span>'
 
@@ -191,9 +197,10 @@ def _robustness(run: dict, L: dict) -> str:
               f'<span class="badge passed">{c.get("break_held", 0)} {_e(L["held"])}</span> '
               f'<span class="badge failed">{c.get("break_broken", 0)} {_e(L["broke"])}</span></p>')]
     if cov.get("planned"):
-        gaps = cov.get("gaps") or []
+        gaps, na = cov.get("gaps") or [], cov.get("not_applicable") or []
         parts.append(f'<p><b>{_e(L["coverage"])}:</b> ' + " ".join(
-            f'<span class="badge {"skipped" if g in gaps else "passed"}">{_e(g)}</span>' for g in cov["planned"])
+            f'<span class="badge {"skipped" if g in gaps or g in na else "passed"}">{_e(g)}'
+            + (f' · {_e(L["na"])}' if g in na else "") + "</span>" for g in cov["planned"])
             + (f' <span class="muted">{_e(L["gaps"])}: {_e(", ".join(gaps))}</span>' if gaps
                else f' <span class="muted">{_e(L["all_covered"])}</span>') + "</p>")
     parts.append(f'<h3>{_e(L["battery"])}</h3>')
@@ -203,6 +210,8 @@ def _robustness(run: dict, L: dict) -> str:
     hits = [r for r in battery.get("results", []) if r["broke"]]
     parts.append(f'<p>{battery.get("endpoints", 0)} {_e(L["endpoint"]).lower()}(s) · {battery.get("cases", 0)} '
                  f'{_e(L["cases"])} · <span class="badge {"failed" if hits else "passed"}">{len(hits)} {_e(L["broke"])}</span></p>')
+    if battery.get("note"):
+        parts.append(f'<p class="muted">{_e(battery["note"])}</p>')
     if not hits:
         return "".join(parts) + f'<p class="muted">{_e(L["battery_ok"])}</p>'
     rows = "".join(f'<tr><td>{_e(r["endpoint"])}</td><td><code>{_e(r["category"])}</code></td><td>{_e(r["label"])}</td>'
@@ -221,6 +230,9 @@ def html_report(run: dict, language: str = "en") -> str:
     v = run["verdict"]
     counts = " ".join(f'<span class="badge {s}">{c.get(s, 0)} {_e(L["st"][s])}</span>'
                       for s in ("passed", "failed", "flaky", "skipped", "not_covered") if c.get(s))
+    n_prop = c.get("proposed_total", 0)
+    proposals = (f' · {n_prop} {_e(L["proposal" if n_prop == 1 else "proposals"])} '
+                 f'({c.get("proposed_not_met", 0)} {_e(L["not_met_n"])})' if n_prop else "")
     meta = [(L["project"], run.get("project")), (L["task"], run.get("task_ref") or run["slug"]),
             (L["host"], run.get("host")), (L["branch"], f'{run.get("branch", "")} · {run.get("commit", "")}'),
             (L["date"], (run.get("created") or "").replace("T", " ")), (L["run"], run["id"]),
@@ -228,8 +240,9 @@ def html_report(run: dict, language: str = "en") -> str:
     rows = []
     for u in run["uacs"]:
         src = L["src"].get(u.get("source") or "", u.get("source") or "")
+        kinds = u["kinds"] + [f"break:{b}" for b in u.get("breaks", [])] + ([L["proposed"]] if u.get("proposed") else [])
         rows.append(f'<tr><td class="id"><a href="#{_e(u["id"])}">{_e(u["id"])}</a></td><td>{_e(u["name"])}</td>'
-                    f'<td>{_e(", ".join(u["kinds"] + [f"break:{b}" for b in u.get("breaks", [])]))}</td>'
+                    f'<td>{_e(", ".join(kinds))}</td>'
                     f'<td>{_e(src)}</td><td>{_e(u.get("ref") or "")}</td>'
                     f'<td>{len(u["tests"])}</td><td>{_status(u, L)}</td></tr>')
     sections = []
@@ -249,7 +262,7 @@ def html_report(run: dict, language: str = "en") -> str:
 <h1>{_e(L["title"])}</h1><p class="sub">{_e(run["feature"])}</p>
 <div class="meta">{"".join(f"<div><span>{_e(k)}</span><b>{_e(v_)}</b></div>" for k, v_ in meta)}</div>
 <div class="verdict v-{_e(v)}"><span class="big">{_e(L["verdict"][v])}</span>
-<span class="counts">{counts}</span><span class="muted">{c.get("total", 0)} UAC</span></div>
+<span class="counts">{counts}</span><span class="muted">{c.get("total", 0)} UAC{proposals}</span></div>
 {f'<p>{_e(run["description"])}</p>' if run.get("description") else ""}
 <h2>{_e(L["summary"])}</h2>
 <table><thead><tr><th>UAC</th><th>{_e(L["criteria"])}</th><th>{_e(L["type"])}</th><th>{_e(L["source"])}</th>

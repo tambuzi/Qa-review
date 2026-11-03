@@ -25,6 +25,7 @@ class UacSettings:
     language: str = "en"                         # language of the UACs and the report (en | es)
     attacks: str = "local"                       # automatic battery: local (local hosts only) | always | off
     attack_timeout_sec: float = 10               # per request of the automatic battery
+    component: dict = field(default_factory=dict)  # {role, owns, delegates}: what this component is responsible for
 
 
 def settings(root: Path) -> UacSettings:
@@ -65,8 +66,9 @@ def path(root: Path, slug: str) -> Path:
 
 
 def save(root: Path, slug: str, text: str) -> tuple[Path, gherkin.Feature]:
+    from . import scope
     feature = gherkin.parse(text)
-    problems = gherkin.validate(feature)
+    problems = gherkin.validate(feature) + scope.problems(root, feature)
     if problems:
         raise gherkin.GherkinError("the UACs are not valid yet:\n- " + "\n- ".join(problems))
     p = path(root, slug)

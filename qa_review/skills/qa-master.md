@@ -17,6 +17,8 @@ is the judgment. Without the MCP tools the same steps exist as
 
 - Every result has two explanations: the product is wrong, or your test is wrong. Rule one out before you
   report anything.
+- Test this component, not the whole system. A rule that another service enforces is not this component's
+  bug, however true the rule is.
 - Never make a run green by weakening an assertion, copying the actual value into the expected one, adding
   retries or skipping a test. If the expectation itself was wrong (you misread the task), say so and fix it
   openly.
@@ -34,8 +36,14 @@ is the judgment. Without the MCP tools the same steps exist as
 The few minutes that decide everything. Read the task, the diff and the existing tests the draft packet lists
 (`uac_draft_packet`), then write down for yourself:
 
+- **Responsibility**: what this component owns and what it delegates. The packet shows `uac.component` when it is
+  configured. When it is not and it says "this change calls other services", the component may be a proxy,
+  gateway or BFF: ask the user what it owns before drafting, and suggest saving the answer in `.qa-review.yaml`.
+  An intermediary owns forwarding intact, relaying the next service's answers, timeouts, headers and routing;
+  the business rules behind it belong to the next service.
 - **Actors**: who calls this, and who must not be able to.
-- **Domain invariants**: the rules nobody writes because they are "obvious":
+- **Domain invariants**: the rules nobody writes because they are "obvious" (then check who enforces each one:
+  this component, or a service behind it):
   - money: exact cents, never negative unless allowed, the rounding rule, currency, order of discounts and taxes;
   - quantities: integers, zero, minimum and maximum;
   - time: time zones, DST, end of month, leap day, "expires now";
@@ -61,12 +69,23 @@ them silently in either direction.
   UI). "It is rejected" is not an oracle; "422 with message X and the total is still 50.00 €" is.
 - Every rule gets both sides and its edges: just inside, exactly at and just outside each boundary.
 - An error must leave the state unchanged: assert it.
-- An ambiguous rule: write the UAC with the reading you chose, put `Assumption: …` in its description and list
-  it as a question for the user.
-- Domain invariants from step 1 become UACs even when the task forgot them (`@source:code`, and the
-  description says which invariant).
-- Add `@break` UACs from the attack plan for the categories that matter for *this* change, ordered by risk. One
-  of each category just to fill the plan is noise.
+- An ambiguous rule: write the UAC with the reading you chose, put `Assumption: …` under the Scenario line and
+  list it as a question for the user.
+- Every UAC says what makes it required, and `uac_save` checks it: `@source:task @ref:<criterion>`,
+  `@source:code @ref:<file>:<line>` (the code of this component that implements it) or
+  `@source:tests @ref:<file>::<test>`. If you cannot point to any of them, it is not a required criterion.
+- Something you believe the team should want, which neither the task, this component's code nor its tests
+  require (a domain invariant nobody enforces here, idempotency, a stricter status code): `@proposed` with a
+  `Why:` line. It is reported as a proposal and does not change the verdict.
+- The owner test, for every UAC: **if it fails, would the team that owns this component accept it as their
+  bug?** "It depends" or "no" means drop it or make it `@proposed`. A proxy's team would not accept "a negative
+  amount is not rejected" (the payments service validates it); they would accept "a negative amount does not
+  reach the payments service intact".
+- Behaviour the framework gives for free (a method the route does not define, an unknown route) is not this
+  change's behaviour unless the change's code handles it.
+- Add `@break` UACs from the attack plan for the categories that matter for *this* change, ordered by risk. A
+  category that does not apply is closed with `@na:<category>` on the Feature and the reason in its
+  description, never with a filler UAC.
 - When the user is around, show the UACs before writing tests: that is the cheapest place to fix a
   misunderstanding.
 
@@ -114,8 +133,8 @@ Signals worth knowing:
 - A selector timeout: a wrong selector or a changed UI is far more likely than a slow feature.
 - A 2xx where hostile input should get a 4xx: the input was accepted. Look at what it did to the state; that is
   usually the real bug.
-- A 5xx (500, 501) for a method or Content-Type the route does not support: a real bug, small; it should answer
-  405, 415 or 400.
+- Behind an intermediary, a 4xx or 5xx may be the next service's answer relayed as it is. Find out which service
+  produced it before you report it against this one.
 
 ### Verify the greens too
 
@@ -136,12 +155,15 @@ is false safety.
 - **Escalate what held**: through the UI instead of the API, more concurrency, other encodings, chained with a
   state change.
 - **Take the tours the change touches:**
+  - intermediary: values the next service must judge reach it intact, its errors and timeouts come back right,
+    headers (correlation and idempotency ids, credentials, hop-by-hop), routes not exposed stay unreachable;
   - money: float drift, rounding, negative results, stacking, order of operations, currencies;
   - lifecycle: every action in every state, use after delete, use after expiry;
   - repetition: double submit, retry after a timeout, back button and resubmit, two tabs;
   - limits: empty, one, many, max + 1, page 0, page -1, a huge page size;
   - identity: other users' ids, deleted, malformed, guessable;
   - UI: slow and failed network, refresh mid-flow, keyboard only, narrow screen, long text breaking the layout.
+- Cover a gap of the attack plan only if it touches what this component owns; otherwise close it with `@na`.
 - **Stop** when no high-risk area is left unattacked and a round found no new confirmed bug. After 3 rounds, ask
   the user before going on. Every round must earn its cost: never add UACs for the count.
 
@@ -155,8 +177,8 @@ Lead with the verdict and what the team must do. Then:
    - expected vs actual;
    - the severity, with a one-line reason;
    - the UAC id.
-2. **Questions for product**: assumptions you made and contradictions between the task, the code and the
-   existing tests.
+2. **Questions for product**: assumptions you made, proposals that were not met, and contradictions between the
+   task, the code and the existing tests.
 3. **Outside the task but important**: what you saw that the task did not ask about (no authentication, an
    open reset endpoint). Report it; do not turn it into UACs.
 4. **Coverage** in one line: UACs, adversarial ones, plan gaps, rounds run. Do not list what passed.
@@ -167,7 +189,7 @@ Severity:
 - **Critical**: wrong money, data loss or corruption, a security hole, a crash on common input.
 - **High**: the main path is broken, a crash on crafted input, state corrupted by an error.
 - **Medium**: a wrong error or status, the UI does not recover, an edge case of a business rule.
-- **Low**: cosmetic, wording, a non-standard status for an unsupported method.
+- **Low**: cosmetic, wording, a non-standard status code.
 
 Never say "all good" from a green run you have not verified, and never say "it's broken" from a red you have
 not reproduced.

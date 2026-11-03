@@ -94,9 +94,12 @@ def cmd_uac(a) -> int:
             res = uac.report_again(root, a.slug, a.run, a.format)
         c = res["counts"]
         print(f"{res['verdict'].upper()}  {c['passed']}/{c['total']} UAC passed"
-              + "".join(f", {c[k]} {k.replace('_', ' ')}" for k in ("failed", "flaky", "skipped", "not_covered") if c[k]))
+              + "".join(f", {c[k]} {k.replace('_', ' ')}" for k in ("failed", "flaky", "skipped", "not_covered") if c[k])
+              + (f"; {c['proposed_total']} proposed outside the verdict ({c['proposed_not_met']} not met)"
+                 if c.get("proposed_total") else ""))
         for u in res["uacs"]:
-            print(f"  {u['id']:<7} {u['status']:<12} {u['name']}")
+            status = ("not met" if u["status"] == "failed" else u["status"]) if u.get("proposed") else u["status"]
+            print(f"  {u['id']:<7} {status:<12} {u['name']}" + ("  [proposed]" if u.get("proposed") else ""))
         rb = res.get("robustness") or {}
         if rb:
             bat = rb["battery"]
@@ -106,6 +109,8 @@ def cmd_uac(a) -> int:
                   + (f"; gaps: {', '.join(rb['attack_gaps'])}" if rb.get("attack_gaps") else ""))
             for line in rb.get("battery_breaks", [])[:10]:
                 print(f"  BROKE  {line}")
+            if bat.get("note"):
+                print(f"  note: {bat['note']}")
         for kind, path in res["report"].items():
             if kind != "pdf_method":
                 print(f"{kind}: {path}")

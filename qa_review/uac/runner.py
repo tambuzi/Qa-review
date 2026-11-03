@@ -15,7 +15,7 @@ from pathlib import Path
 from .. import gitdiff, target
 from ..checks import Check, _tool, run_one
 from ..config import load as load_config
-from . import attacks, baseline, gherkin, store, surface
+from . import attacks, baseline, gherkin, scope, store, surface
 
 _ID_IN_TITLE = re.compile(r"\bUAC-(\d+)\b", re.IGNORECASE)
 _EXT = {"image/png": "png", "image/jpeg": "jpg", "application/json": "json", "text/plain": "txt",
@@ -125,23 +125,30 @@ def summarize(feature: gherkin.Feature, tests: list[dict]) -> tuple[list[dict], 
         known.add(uid)
         linked = [t for t in tests if uid in t["uacs"]]
         uacs.append({"id": uid, "name": sc.name, "kinds": sc.kinds, "source": sc.tag_value("source"),
-                     "ref": sc.tag_value("ref"), "breaks": sc.breaks, "text": sc.text,
+                     "ref": sc.tag_value("ref"), "breaks": sc.breaks, "proposed": sc.proposed, "text": sc.text,
                      "status": _uac_status(linked), "tests": linked})
     orphans = [t for t in tests if not t["uacs"] or not set(t["uacs"]) & known]
-    counts = {s: sum(1 for u in uacs if u["status"] == s) for s in STATUSES}
-    counts["total"] = len(uacs)
-    adversarial = [u for u in uacs if u["breaks"]]
+    required = [u for u in uacs if not u["proposed"]]           # @proposed UACs stay outside the verdict
+    counts = {s: sum(1 for u in required if u["status"] == s) for s in STATUSES}
+    counts["total"] = len(required)
+    proposed = [u for u in uacs if u["proposed"]]
+    counts["proposed_total"] = len(proposed)
+    counts["proposed_not_met"] = sum(1 for u in proposed if u["status"] == "failed")
+    adversarial = [u for u in required if u["breaks"]]
     counts["break_total"] = len(adversarial)
     counts["break_held"] = sum(1 for u in adversarial if u["status"] == "passed")
     counts["break_broken"] = sum(1 for u in adversarial if u["status"] == "failed")
     return uacs, orphans, counts
 
 
-def coverage(uacs: list[dict], plan: list[dict]) -> dict:
-    """Which categories of the attack plan have at least one @break UAC, and which are gaps."""
+def coverage(uacs: list[dict], plan: list[dict], not_applicable: list[str] | None = None) -> dict:
+    """Which categories of the attack plan have at least one @break UAC, which were closed on purpose (@na) and
+    which are gaps."""
     covered = sorted({c for u in uacs for c in u["breaks"]})
     planned = sorted({r["category"] for r in plan})
-    return {"planned": planned, "covered": covered, "gaps": [c for c in planned if c not in covered]}
+    na = sorted(set(not_applicable or []) - set(covered))
+    return {"planned": planned, "covered": covered, "not_applicable": na,
+            "gaps": [c for c in planned if c not in covered and c not in na]}
 
 
 def verdict(counts: dict, battery: dict | None = None) -> str:
@@ -199,13 +206,17 @@ def run(root: Path, slug: str, host: str | None = None, allow_protected: bool = 
     spec = (cfg.qa.get("openapi") or {}).get("spec") if isinstance(cfg.qa.get("openapi"), dict) else None
     eps = surface.surface(cfg.root, changes, spec) if changes else []
     has_ui = bool(changes) and any(surface.sources.is_ui_file(f.path) for f in changes.files if f.status != "deleted")
-    plan = attacks.plan(eps, has_ui)
+    comp = scope.component(st)
+    plan = attacks.plan(eps, has_ui, scope.is_intermediary(comp), scope.owns_auth(comp))
     go, why = baseline.should_run(host, st.attacks, attacks_on)
     if go and eps:
         battery = baseline.run(host, eps, timeout=st.attack_timeout_sec)
     else:
         battery = {"ran": False, "reason": why if not go else "no HTTP endpoints in the change",
                    "endpoints": len(eps), "cases": 0, "broken": 0, "results": []}
+    if scope.is_intermediary(comp) and battery.get("broken"):
+        battery["note"] = ("this component is an intermediary: a 5xx may be the next service's answer relayed "
+                           "as is; check which service failed before reporting it here")
     dirty = bool(_git(cfg.root, "status", "--porcelain"))
     data = {
         "id": run_id, "slug": slug, "feature": feature.name, "description": feature.description,
@@ -215,7 +226,8 @@ def run(root: Path, slug: str, host: str | None = None, allow_protected: bool = 
         "project": cfg.root.name, "command": cmd, "exit_code": result.exit_code,
         "duration_sec": result.duration_sec, "output_tail": result.output[-4000:],
         "counts": counts, "verdict": verdict(counts, battery), "uacs": uacs, "orphans": orphans,
-        "surface": eps, "attack_plan": plan, "coverage": coverage(uacs, plan), "battery": battery,
+        "surface": eps, "attack_plan": plan, "coverage": coverage(uacs, plan, feature.not_applicable), "battery": battery,
+        "component": comp,
         "run_dir": str(run_dir),
     }
     (run_dir / "run.json").write_text(json.dumps(data, indent=1, ensure_ascii=False), encoding="utf-8")

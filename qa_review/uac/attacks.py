@@ -38,9 +38,9 @@ CATEGORIES: dict[str, Category] = {c.id: c for c in (
              "admin-only actions as a normal user",
              "401/403 (or 404 for others' resources) and no data from other users; privilege fields ignored"),
     Category("http", "HTTP misuse", ("api",),
-             "huge body (MBs), repeated query params, unexpected methods on the route, missing/garbage headers, "
-             "very long URLs",
-             "413/405/4xx as appropriate, fast; never a 5xx or a hang"),
+             "huge body (MBs), repeated query params, missing/garbage headers, very long URLs (only what this "
+             "component parses itself; methods and routes the framework rejects are not this change's behaviour)",
+             "413/4xx as appropriate, fast; never a 5xx or a hang"),
     Category("concurrency", "Concurrency and repetition", ("api", "e2e"),
              "the same request N times in parallel, double-click on submit, retry after timeout, two users editing "
              "the same thing",
@@ -52,7 +52,27 @@ CATEGORIES: dict[str, Category] = {c.id: c for c in (
              "slow or failed network (page.route abort), server errors on a call, offline, very narrow screen, "
              "keyboard only",
              "a visible, understandable error and a way to recover; no blank page, no lost input, no broken layout"),
+    # for intermediaries (proxy, gateway, BFF): what they own is forwarding, not the business rules downstream
+    Category("passthrough", "Forwarded intact", ("api",),
+             "odd but legal values the next service must judge (negative or huge amounts, decimals, unicode, empty "
+             "and unknown fields, big bodies): send them and check what reaches the next service",
+             "forwarded byte for byte (body, query, relevant headers), not validated, rewritten or dropped here"),
+    Category("upstream", "Answers of the next service", ("api",),
+             "the next service answers 4xx, 5xx, a slow response, a timeout, a dropped connection, invalid JSON",
+             "4xx relayed as they are (status and body); failures mapped to the documented status (502/503/504) "
+             "within the timeout, with no internal details; nothing retried that must not be (payments)"),
+    Category("headers", "Header hygiene", ("api",),
+             "hop-by-hop headers (Connection, Transfer-Encoding), internal headers from the next service, "
+             "correlation/idempotency ids, client auth headers, X-Forwarded-*",
+             "correlation and idempotency ids forwarded, hop-by-hop removed, internal headers and credentials not "
+             "leaked to the client nor forwarded where they must not go"),
+    Category("routing", "Routing", ("api",),
+             "path traversal (/../, %2e%2e, double encoding) towards other routes of the next service, another host "
+             "in the URL or Host header (SSRF), unknown routes",
+             "only the routes this component exposes reach the next service; nothing else is reachable through it"),
 )}
+
+INTERMEDIARY_CATEGORIES = ("passthrough", "upstream", "headers", "routing")
 
 
 # Payloads every attack helper and the automatic battery share.
@@ -78,9 +98,19 @@ LEAK_PATTERNS = [
 ]
 
 
-def plan(surface: list[dict], has_ui: bool) -> list[dict]:
-    """A deterministic list of attacks worth writing UACs for, by endpoint (and the UI when it changed)."""
+def plan(surface: list[dict], has_ui: bool, intermediary: bool = False, owns_auth: bool = False) -> list[dict]:
+    """A deterministic list of attacks worth writing UACs for, by endpoint (and the UI when it changed).
+    An intermediary does not own the business rules of the service behind it, so it is attacked on what it does
+    own: forwarding, relaying answers, headers and routing (and auth only when it owns it)."""
     out = []
+    if intermediary:
+        for ep in surface:
+            cats = list(INTERMEDIARY_CATEGORIES) + (["auth"] if owns_auth else [])
+            for c in cats:
+                cat = CATEGORIES[c]
+                out.append({"target": f"{ep['method'].upper()} {ep['path']}", "category": c, "on": "the endpoint",
+                            "try": cat.ideas, "expect": cat.safe})
+        surface = []                                   # the UI rows below still apply
     for ep in surface:
         method = ep["method"].upper()
         writes = method in ("POST", "PUT", "PATCH", "DELETE", "ANY")

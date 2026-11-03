@@ -35,7 +35,7 @@ Feature: Cart discount
       | 0       |
       | -3      |
 
-  @UAC-3 @api @source:code
+  @UAC-3 @api @source:code @ref:app/pricing.py:2
   Scenario: The total is never negative
     Given a cart of 10 €
     When I apply 15 €

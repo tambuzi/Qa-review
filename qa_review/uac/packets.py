@@ -8,7 +8,7 @@ from .. import gitdiff
 from ..config import load as load_config
 from ..impact import analyse
 from ..review import _bounded_diff
-from . import attacks, existing, gherkin, scaffold, sources, store, surface
+from . import attacks, existing, gherkin, scaffold, scope, sources, store, surface
 
 _LANG = {"en": "English", "es": "Spanish"}
 
@@ -27,17 +27,31 @@ Tag the `Feature` with `@task:{ref}` so the report can trace it back to the task
 Every scenario needs these tags:
 - `@UAC-<n>`: unique, numbered from 1 (keep the numbers of existing UACs; new ones continue from {next_id});
 - `@e2e` if it is checked through the UI, `@api` if through HTTP, or both;
-- `@source:task` when it comes from the task, `@source:code` when you add it because the code does it
-  (endpoints, validations, errors) and the task does not say it, `@source:tests` when it comes from an
-  existing test of the project (then `@ref:<file>::<test>`);
-- `@ref:<id>` pointing at the original criterion or issue when there is one (e.g. `@ref:1.2`, `@ref:PROJ-123`).
+- what makes it required, with its `@ref` (`uac_save` checks it and rejects the UAC otherwise):
+  - `@source:task @ref:<criterion or issue>`: the task asks for it (`@ref:1.2`, `@ref:PROJ-123`);
+  - `@source:code @ref:<file>:<line>`: the code of THIS component implements it and the task does not say it
+    (a validation, an error, a header it sets). The ref points to that code;
+  - `@source:tests @ref:<file>::<test>`: an existing test of the project already requires it;
+  - `@proposed` with a `Why:` line under the Scenario: none of the above, but you think the team should want it.
+    Proposals are reported apart and do not change the verdict until someone accepts them.
+
+## Scope: only what this component is responsible for
+
+Before keeping a UAC, ask: **if it fails, would the team that owns this component accept it as their bug?**
+If the answer is "it depends" or "no", drop it or make it `@proposed`.
+- A rule enforced by another service is not a UAC here. A proxy that forwards payments does not validate the
+  amount: the UAC is that the amount reaches the next service intact and its rejection comes back as it is.
+- Behaviour the framework or the infrastructure gives for free (a method the route does not define, a route
+  that does not exist) is not this change's behaviour unless the code of the change handles it.
+- An attack category that does not apply to this task is closed with `@na:<category>` on the Feature and a line
+  in its description saying why (`N/A auth: public endpoint, no user data`), never with a filler UAC.
 
 Write two kinds of UAC:
 
 1. **Prove it works** (functional): what the task asks for, plus what the code adds.
 2. **Try to break it** (adversarial): tag them `@break:<category>` ({categories}). Use the attack plan
-   above: at least one adversarial UAC per relevant row, more where money, permissions or data writes are
-   involved. Each one states the hostile input AND the safe outcome the system must show ("Then the
+   above for the rows that touch what this component does, more where money, permissions or data writes are
+   involved; they need a source like any other UAC. Each one states the hostile input AND the safe outcome the system must show ("Then the
    response is 422 with the message ... And the cart total is unchanged"), never just "it does not crash".
    Think like an attacker and like a careless user: what would make this code produce a wrong result,
    leak data, apply something twice or end in a 5xx?
@@ -45,7 +59,8 @@ Write two kinds of UAC:
 Rules:
 - Observable and testable: concrete inputs, exact outcomes (status codes, messages, what appears on screen).
   "Then it works" is not a criterion.
-- Cover the happy path, validation errors, permissions/auth and the edge cases the code shows.
+- Cover the happy path, and the validation errors, permissions and edge cases that the task or this
+  component's code define.
 - The task is the source of truth for WHAT must happen. If the code does not do something the task asks
   for, still write that UAC: its test will fail, and that is exactly what the report must show.
 - Do not invent product behaviour that neither the task nor the code supports.
@@ -67,24 +82,25 @@ Feature: Cart discount
     Then the response is 200
     And the cart total is 45.00 €
 
-  @UAC-2 @api @source:code @break:boundary
+  @UAC-2 @api @source:task @ref:PROJ-123 @break:boundary
   Scenario: A discount larger than the total leaves the total at 0
     Given a cart with products worth 10.00 €
     When I apply a 15.00 € discount
     Then the cart total is 0.00 €
 
-  @UAC-3 @api @source:code @break:concurrency
+  @UAC-3 @api @source:code @ref:app/cart.py:41 @break:injection
+  Scenario: A script in the coupon code is rejected by the coupon validation
+    Given a cart with products worth 50.00 €
+    When I apply the coupon "<script>alert(1)</script>"
+    Then the response is 422 with the message "Invalid coupon"
+    And no response shows a stack trace or a server error
+
+  @UAC-4 @api @proposed @break:concurrency
   Scenario: The same discount sent twice at once is applied once
+    Why: a double click on "Apply" would otherwise charge the discount twice; the task does not say it.
     Given a cart with products worth 50.00 €
     When I send the same 5.00 € discount 5 times in parallel
     Then the cart total is 45.00 €
-
-  @UAC-4 @api @source:code @break:injection
-  Scenario: A script in the coupon code is stored as text
-    Given a cart with products worth 50.00 €
-    When I apply the coupon "<script>alert(1)</script>"
-    Then the response is 422 or the coupon is returned escaped
-    And no response shows a stack trace or a server error
 ```
 """
 
@@ -124,6 +140,7 @@ def draft(root: Path, slug: str, task: sources.Task, base: str | None = None,
         diff, cut = _bounded_diff(changes.diff, max_diff_chars)
         parts += ["", "```diff", diff.rstrip(), "```" + (" (truncated)" if cut else ""), ""]
         eps = surface.surface(cfg.root, changes, _spec(cfg))
+        parts += scope.section(scope.component(st), scope.outbound_calls(changes))
         parts += existing_section(cfg.root, eps)
         parts += attack_section(cfg, changes, bool(sig["pages"]), eps)
     else:
@@ -161,7 +178,8 @@ def attack_section(cfg, changes, has_ui: bool, eps: list[dict] | None = None) ->
     """The attack surface of the change and a deterministic plan of what to try to break."""
     if eps is None:
         eps = surface.surface(cfg.root, changes, _spec(cfg))
-    rows = attacks.plan(eps, has_ui)
+    comp = scope.component(store.settings(cfg.root))
+    rows = attacks.plan(eps, has_ui, scope.is_intermediary(comp), scope.owns_auth(comp))
     if not rows:
         return []
     parts = ["## Attack surface"]
@@ -169,7 +187,8 @@ def attack_section(cfg, changes, has_ui: bool, eps: list[dict] | None = None) ->
         fields = ", ".join(_describe(f) for f in e.get("fields", [])) or "no input fields found"
         params = f" · path params: {', '.join(e['path_params'])}" if e.get("path_params") else ""
         parts.append(f"- {e['method']} {e['path']} ({e['source']}) · {fields}{params}")
-    parts += ["", "## Attack plan (write @break UACs for these)", "| Target | Category | On | Try | Must |",
+    parts += ["", "## Attack plan (candidates: keep the rows this component is responsible for)",
+              "| Target | Category | On | Try | Must |",
               "|---|---|---|---|---|"]
     parts += [f"| {r['target']} | `{r['category']}` | {r['on']} | {r['try']} | {r['expect']} |" for r in rows]
     return parts + [""]
@@ -264,6 +283,8 @@ def iterate(root: Path, slug: str, run: dict) -> str:
               f"{c['passed']}/{c['total']} UAC passed · {c.get('break_total', 0)} adversarial UACs, "
               f"{c.get('break_held', 0)} held, {c.get('break_broken', 0)} broke the system."), ""]
 
+    proposals = [u for u in uacs if u.get("proposed") and u["status"] == "failed"]
+    uacs = [u for u in uacs if not u.get("proposed")]
     broke = [u for u in uacs if u["breaks"] and u["status"] == "failed"]
     if broke:
         parts.append("## It broke here: attack around it")
@@ -301,16 +322,22 @@ def iterate(root: Path, slug: str, run: dict) -> str:
                      "with a state change.")
         parts += [f"- {u['id']} {u['name']} (`{', '.join(u['breaks'])}`)" for u in held]
         parts.append("")
+    if proposals:
+        parts.append("## Proposals not met (questions for the team, not defects until they accept them)")
+        parts += [f"- {u['id']} {u['name']}" for u in proposals]
+        parts.append("")
     gaps = (run.get("coverage") or {}).get("gaps") or []
     if gaps:
         parts.append("## Gaps in the attack plan (no @break UAC yet)")
+        parts.append("Cover a gap only if it touches what this component is responsible for; otherwise close it with "
+                     "`@na:<category>` on the Feature and the reason in its description. Never add a filler UAC.")
         plan = run.get("attack_plan") or []
         for g in gaps:
             rows = [r for r in plan if r["category"] == g]
             targets = ", ".join(sorted({r["target"] for r in rows}))
             parts.append(f"- `{g}` on {targets}: {attacks.CATEGORIES[g].ideas}. Must: {attacks.CATEGORIES[g].safe}.")
         parts.append("")
-    not_covered = [u for u in uacs if u["status"] == "not_covered"]
+    not_covered = [u for u in run["uacs"] if u["status"] == "not_covered"]
     if not_covered:
         parts.append("## UACs with no test yet")
         parts += [f"- {u['id']} {u['name']}" for u in not_covered]

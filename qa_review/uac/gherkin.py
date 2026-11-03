@@ -42,6 +42,12 @@ class Scenario:
     line: int
     text: str                           # verbatim, tags included
     outline: bool = False
+    description: str = ""               # free text between the Scenario line and its first step
+
+    @property
+    def proposed(self) -> bool:
+        """A criterion the QA proposes (not required by the task): reported apart, outside the verdict."""
+        return any(t.lower() == "@proposed" for t in self.tags)
 
     @property
     def uac_id(self) -> str | None:
@@ -66,7 +72,7 @@ class Scenario:
     def to_dict(self) -> dict:
         d = asdict(self)
         d.update(id=self.uac_id, kinds=self.kinds, source=self.tag_value("source"), ref=self.tag_value("ref"),
-                 breaks=self.breaks)
+                 breaks=self.breaks, proposed=self.proposed)
         return d
 
 
@@ -77,6 +83,11 @@ class Feature:
     tags: list[str]
     background: list[Step] = field(default_factory=list)
     scenarios: list[Scenario] = field(default_factory=list)
+
+    @property
+    def not_applicable(self) -> list[str]:
+        """Attack categories closed on purpose for this task (@na:<category> on the Feature)."""
+        return [t.split(":", 1)[1].lower() for t in self.tags if t.lower().startswith("@na:")]
 
     def by_id(self) -> dict[str, Scenario]:
         return {s.uac_id: s for s in self.scenarios if s.uac_id}
@@ -170,6 +181,10 @@ def parse(text: str) -> Feature:
         if current is None and not in_background:
             desc.append(stripped)
             continue
+        if current is not None and not current.steps:          # the scenario's own description
+            current.description = (current.description + "\n" + stripped).strip()
+            current.text += raw + "\n"
+            continue
         raise GherkinError(f"line {n}: not a Gherkin line: {stripped!r}")
     if feature is None:
         raise GherkinError("empty: expected 'Feature:'")
@@ -178,8 +193,13 @@ def parse(text: str) -> Feature:
     return feature
 
 
+SOURCES = ("task", "code", "tests")
+WHY = re.compile(r"(^|\n)\s*(Why|Por qu[eé])\s*:", re.IGNORECASE)
+
+
 def validate(feature: Feature) -> list[str]:
     """Problems that would make a UAC untestable or untraceable. Empty list = valid."""
+    from .attacks import CATEGORIES
     problems = []
     if not feature.scenarios:
         problems.append("no scenarios: write one Scenario per acceptance criterion")
@@ -200,11 +220,19 @@ def validate(feature: Feature) -> list[str]:
             problems.append(f"{where}: needs at least one When and one Then")
         if not s.name:
             problems.append(f"{where}: give the scenario a name")
-        from .attacks import CATEGORIES
         unknown = [b for b in s.breaks if b not in CATEGORIES]
         if unknown:
             problems.append(f"{where}: unknown @break category {', '.join(unknown)} "
                             f"(use {', '.join(CATEGORIES)})")
+        src = s.tag_value("source")
+        if src is not None and src.lower() not in SOURCES:
+            problems.append(f"{where}: @source:{src} is not a source (use {', '.join(SOURCES)})")
+        if s.proposed and not WHY.search(s.description):
+            problems.append(f"{where}: a @proposed UAC needs a 'Why:' line under the Scenario saying why the team "
+                            "should want it (it is not required by the task)")
+    unknown = [c for c in feature.not_applicable if c not in CATEGORIES]
+    if unknown:
+        problems.append(f"Feature: unknown @na category {', '.join(unknown)} (use {', '.join(CATEGORIES)})")
     return problems
 
 

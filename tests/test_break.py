@@ -8,7 +8,18 @@ import yaml
 
 from qa_review import gitdiff
 from qa_review.cli import main
-from qa_review.uac import api, attacks, baseline, gherkin, scaffold, store, surface
+from qa_review.uac import (
+    api,
+    attacks,
+    baseline,
+    gherkin,
+    report,
+    runner,
+    scaffold,
+    scope,
+    store,
+    surface,
+)
 
 API_PY = '''from fastapi import FastAPI
 app = FastAPI()
@@ -205,17 +216,17 @@ def test_battery_unreachable():
 FEATURE = """@task:T-1
 Feature: Discounts
 
-  @UAC-1 @api @source:task
+  @UAC-1 @api @source:task @ref:T-1
   Scenario: valid discount
     When I apply 5
     Then the total is 45
 
-  @UAC-2 @api @source:code @break:types
+  @UAC-2 @api @source:code @ref:app/api.py:1 @break:types
   Scenario: wrong types are rejected
     When I send garbage
     Then the response is 422
 
-  @UAC-3 @api @source:code @break:injection
+  @UAC-3 @api @source:code @ref:app/api.py:1 @break:injection
   Scenario: injection is harmless
     When I send payloads
     Then nothing leaks
@@ -279,6 +290,7 @@ def test_battery_respects_host_and_switch(round_repo, fragile, monkeypatch):
 
 
 def test_scaffold_attack_helpers(repo):
+    with_api(repo)
     api.save(repo, "t", FEATURE)
     text = api.tests_packet(repo, "t")
     assert "tests/uac/attacks.ts" in text and "expectSafeError" in text and "inParallel" in text
@@ -347,3 +359,132 @@ def test_existing_tests_of_the_endpoints(repo):
     assert "## Existing tests of these endpoints" in text
     assert "`tests/test_discount_api.py` → POST /api/cart/discount: `test_discount_is_applied` (line 1)" in text
     assert "@source:tests" in text
+
+
+# ---------------------------------------------------------------- scope: only what this component owns
+PROXY_PY = """import httpx
+from fastapi import FastAPI, Request
+app = FastAPI()
+
+@app.post("/api/payments")
+async def pay(request: Request):
+    r = await httpx.AsyncClient().post("http://payments:8000/payments", content=await request.body())
+    return r.json()
+"""
+
+KIRO_REQ = """# Requirements
+### Requirement 1: Pay
+#### Acceptance Criteria
+1. WHEN the client sends a payment THEN the proxy SHALL forward it to the payments service
+2. WHEN the payments service answers THEN the proxy SHALL return that answer unchanged
+"""
+
+
+def scoped_feature(*scenarios: str, tags: str = "@task:pay") -> str:
+    return f"{tags}\nFeature: Pay through the proxy\n\n" + "\n".join(scenarios)
+
+
+def sc(n: int, tags: str, name: str = "x", desc: str = "") -> str:
+    return (f"  {tags}\n  Scenario: {name} {n}\n" + (f"    {desc}\n" if desc else "")
+            + "    When something\n    Then something else\n")
+
+
+def proxy_repo(repo):
+    (repo / "app" / "proxy.py").write_text(PROXY_PY)
+    spec = repo / ".kiro" / "specs" / "pay"
+    spec.mkdir(parents=True)
+    (spec / "requirements.md").write_text(KIRO_REQ)
+    return repo
+
+
+def test_scenario_description_and_proposed():
+    f = gherkin.parse(scoped_feature(sc(1, "@UAC-1 @api @proposed", desc="Why: double charges cost money.")))
+    s = f.scenarios[0]
+    assert s.proposed and s.description == "Why: double charges cost money." and len(s.steps) == 2
+    assert "Why: double charges" in s.text
+    bad = gherkin.parse(scoped_feature(sc(1, "@UAC-1 @api @proposed")))
+    assert any("needs a 'Why:' line" in p for p in gherkin.validate(bad))
+    na = gherkin.parse(scoped_feature(sc(1, "@UAC-1 @api @source:task @ref:1.1"), tags="@task:pay @na:auth @na:magic"))
+    assert na.not_applicable == ["auth", "magic"]
+    assert any("unknown @na category magic" in p for p in gherkin.validate(na))
+
+
+def test_every_uac_must_be_traceable(repo):
+    proxy_repo(repo)
+    (repo / "tests" / "test_proxy.py").write_text("def test_forwards():\n    pass\n")
+    feature = gherkin.parse(scoped_feature(
+        sc(1, "@UAC-1 @api @source:task @ref:1.1"),                          # a real criterion
+        sc(2, "@UAC-2 @api @source:task @ref:1.4"),                          # not in the spec
+        sc(3, "@UAC-3 @api @source:code"),                                   # the negative-amount kind: no code
+        sc(4, "@UAC-4 @api @source:code @ref:app/proxy.py:7"),               # points to the forwarding code
+        sc(5, "@UAC-5 @api @source:code @ref:app/proxy.py:99"),
+        sc(6, "@UAC-6 @api @source:tests @ref:tests/test_proxy.py::test_forwards"),
+        sc(7, "@UAC-7 @api @source:tests @ref:tests/nope.py::t"),
+        sc(8, "@UAC-8 @api"),                                                # no source at all
+        sc(9, "@UAC-9 @api @proposed", desc="Why: retries must not double charge."),
+        sc(10, "@UAC-10 @api @source:code @ref:1.2"),                        # a criterion under the wrong source
+    ))
+    problems = scope.problems(repo, feature)
+    by = {p.split(" ")[0]: p for p in problems}
+    assert set(by) == {"UAC-2", "UAC-3", "UAC-5", "UAC-7", "UAC-8", "UAC-10"}
+    assert "use @source:task @ref:1.2" in by["UAC-10"]
+    assert "@ref:1.4 is not a criterion of .kiro/specs/pay (it has 1.1, 1.2)" in by["UAC-2"]
+    assert "not this component's behaviour" in by["UAC-3"]
+    assert "app/proxy.py has 8 lines" in by["UAC-5"]
+    assert "tests/nope.py does not exist" in by["UAC-7"]
+    with pytest.raises(gherkin.GherkinError, match="UAC-3"):
+        api.save(repo, "pay", scoped_feature(sc(1, "@UAC-1 @api @source:task @ref:1.1"),
+                                             sc(3, "@UAC-3 @api @source:code")))
+
+
+def test_intermediary_detection_and_component(repo):
+    proxy_repo(repo)
+    text = api.draft_packet(repo, "kiro", "pay")
+    assert "## This change calls other services" in text and "`app/proxy.py:7`" in text
+    assert "role: proxy" in text                                     # suggests the config
+    assert "would the team that owns this component accept it as their bug?" in text
+    assert "| `boundary` |" in text                                  # not configured yet: the default plan
+    (repo / ".qa-review.yaml").write_text(yaml.safe_dump({"uac": {"component": {
+        "role": "proxy", "owns": ["routing", "timeouts"], "delegates": {"payment validation": "payments-service"}}}}))
+    text = api.draft_packet(repo, "kiro", "pay")
+    assert "## What this component owns (uac.component)" in text and "This change calls other services" not in text
+    assert "- payment validation → payments-service" in text
+    assert "A rule this component delegates is not a UAC here" in text
+    for c in ("passthrough", "upstream", "headers", "routing"):
+        assert f"| `{c}` |" in text
+    for c in ("boundary", "types", "auth"):
+        assert f"| `{c}` |" not in text
+
+
+def test_plan_by_role():
+    ep = [{"method": "POST", "path": "/api/payments", "fields": [{"name": "amount"}], "path_params": []}]
+    assert {r["category"] for r in attacks.plan(ep, False, intermediary=True)} == set(attacks.INTERMEDIARY_CATEGORIES)
+    assert "auth" in {r["category"] for r in attacks.plan(ep, False, intermediary=True, owns_auth=True)}
+    assert "unexpected methods" not in attacks.CATEGORIES["http"].ideas
+    assert scope.owns_auth(scope.component(type("S", (), {"component": {"owns": ["auth headers"]}})()))
+    comp = scope.component(type("S", (), {"component": {"role": "Proxy", "delegates": ["amount rules: payments"]}})())
+    assert comp == {"role": "proxy", "owns": [], "delegates": {"amount rules": "payments"}}
+
+
+def test_proposals_stay_outside_the_verdict():
+    feature = gherkin.parse(scoped_feature(sc(1, "@UAC-1 @api @source:task @ref:1.1"),
+                                           sc(2, "@UAC-2 @api @proposed @break:concurrency", desc="Why: idempotency.")))
+    tests = [{"title": "[UAC-1] a", "uacs": ["UAC-1"], "status": "passed"},
+             {"title": "[UAC-2] b", "uacs": ["UAC-2"], "status": "failed"}]
+    uacs, _, counts = runner.summarize(feature, tests)
+    assert counts["total"] == 1 and counts["failed"] == 0
+    assert counts["proposed_total"] == 1 and counts["proposed_not_met"] == 1
+    assert counts["break_total"] == 0 and counts["break_broken"] == 0          # a proposal never "broke" it
+    assert runner.verdict(counts) == "pass"
+    assert uacs[1]["proposed"] and "Not met" in report._status(uacs[1], report.LABELS["en"])
+    cov = runner.coverage([{"breaks": ["types"]}], [{"category": "types"}, {"category": "auth"},
+                                                     {"category": "state"}], ["auth"])
+    assert cov["gaps"] == ["state"] and cov["not_applicable"] == ["auth"]
+
+
+def test_outbound_detection_is_per_language(repo):
+    (repo / "app" / "page.py").write_text('PAGE = "<script>fetch(\'/api/cart\')</script>"\n')
+    (repo / "app" / "client.ts").write_text("export const pay = (b) => fetch('http://payments/pay', b);\n")
+    (repo / "nginx.conf").write_text("location /pay { proxy_pass http://payments; }\n")
+    calls = {c["file"] for c in scope.outbound_calls(gitdiff.collect(repo))}
+    assert calls == {"app/client.ts", "nginx.conf"}

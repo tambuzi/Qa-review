@@ -103,11 +103,11 @@ def summary(data: dict, rep: dict) -> dict:
                            "held": data["counts"].get("break_held", 0),
                            "broken": data["counts"].get("break_broken", 0),
                            "attack_gaps": (data.get("coverage") or {}).get("gaps", []),
-                           "battery": {k: battery.get(k) for k in ("ran", "reason", "cases", "broken")},
+                           "battery": {k: battery.get(k) for k in ("ran", "reason", "cases", "broken", "note")},
                            "battery_breaks": [f"{r['endpoint']} · {r['label']} → {'; '.join(r['broke'])}"
                                               for r in battery.get("results", []) if r["broke"]][:20]},
             "next": "uac_iterate_packet: attack around what broke and cover the gaps",
-            "uacs": [{"id": u["id"], "name": u["name"], "status": u["status"],
+            "uacs": [{"id": u["id"], "name": u["name"], "status": u["status"], "proposed": u.get("proposed", False),
                       "tests": [{"title": t["title"], "status": t["status"],
                                  **({"error": t["error"][:500]} if t["error"] else {})} for t in u["tests"]]}
                      for u in data["uacs"]],

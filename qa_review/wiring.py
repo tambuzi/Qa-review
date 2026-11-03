@@ -39,6 +39,10 @@ CONFIG_TEMPLATE = """\
 #   language: en                    # language of the UACs and the report (en | es)
 #   attacks: local                  # automatic attack battery: local (local hosts only) | always | off
 #   attack_timeout_sec: 10
+#   component:                      # what this component owns: UACs stay inside it
+#     role: service                 # service | proxy | gateway | bff | frontend
+#     owns: [discount rules]
+#     delegates: {payment validation: payments-service}
 """
 
 SKILL = """\

@@ -307,8 +307,11 @@ qa-review prepares, and qa-review validates, stores, runs and documents them.
 The tools do the mechanics; the **qa-master** skill (installed by `qa-review init`, source in
 `qa_review/skills/qa-master.md`) gives the agent the judgment of a senior QA:
 
-- **Model before testing:** actors, domain invariants (money in exact cents, time zones, text limits,
-  identities), the state × action table, the oracle for each behaviour and where the risk is.
+- **Model before testing:** what this component owns and what it delegates, actors, domain invariants (money
+  in exact cents, time zones, text limits, identities) and who enforces each one, the state × action table, the
+  oracle for each behaviour and where the risk is.
+- **The owner test:** every UAC must pass *"if it fails, would the team that owns this component accept it as
+  their bug?"*. If not, it is dropped or becomes a `@proposed` UAC.
 - **UACs and tests that can fail:** concrete values, the Then as the oracle (status, body and state after),
   boundaries on both sides, assumptions written down, and "mutate it in your head" before trusting a test.
 - **Triage every red:** product bug, test bug, environment, flaky or spec question, and reproduce outside the
@@ -318,6 +321,54 @@ The tools do the mechanics; the **qa-master** skill (installed by `qa-review ini
   outside the task, coverage in one line.
 
 Projects wired before this skill existed get it by running `qa-review init` again (existing files are kept).
+
+### Scope: only what this component is responsible for
+
+A UAC is only worth having if, when it fails, it is a bug of **this** component. Two typical mistakes it
+prevents: a payments **proxy** tested for "a negative amount is rejected" (the payments service behind it
+validates that, not the proxy), and "changing the HTTP method fails" when no code of the change handles methods
+(the framework does).
+
+**Say what the component owns**, once per project:
+
+```yaml
+uac:
+  component:
+    role: proxy                     # proxy | gateway | bff | service | frontend
+    owns: [routing, auth headers, timeouts, error mapping]
+    delegates: {payment validation: payments-service}
+```
+
+The draft packet shows it with a rule: a delegated rule is not a UAC here; the UAC is that the input reaches the
+next service intact and its answer comes back as it is. For an intermediary (`proxy`, `gateway`, `bff`…) the
+attack plan changes to what it does own:
+
+| Category | What it tries | What must happen |
+|---|---|---|
+| `passthrough` | values the next service must judge (negative or huge amounts, unicode, unknown fields) | forwarded byte for byte, not validated or rewritten here |
+| `upstream` | the next service answers 4xx/5xx, slowly, not at all, or with invalid JSON | 4xx relayed as they are, failures mapped to 502/503/504 in time, nothing retried that must not be |
+| `headers` | hop-by-hop, internal and credential headers, correlation and idempotency ids | ids forwarded, hop-by-hop removed, nothing internal leaked |
+| `routing` | path traversal and double encoding towards other routes, another host (SSRF) | only the exposed routes reach the next service |
+
+`auth` is added when `owns` mentions auth or tokens. When `uac.component` is not set and the change calls other
+services (httpx, requests, fetch, axios, Guzzle, RestTemplate, `proxy_pass`…, detected per language), the packet
+says so and asks the agent to confirm the role with you before drafting.
+
+**Every UAC says what makes it required**, and `uac_save` rejects the ones that cannot:
+
+| Tags | Meaning | Checked |
+|---|---|---|
+| `@source:task @ref:1.2` | the task asks for it | for a Kiro spec, `1.2` must be one of its criteria |
+| `@source:code @ref:app/proxy.py:42` | the code of this component implements it | the file exists and has that line |
+| `@source:tests @ref:tests/test_pay.py::test_x` | an existing test requires it | the file exists |
+| `@proposed` + a `Why:` line | the QA thinks the team should want it | the `Why:` line is there |
+
+A **proposed** UAC is run and reported like any other, but outside the verdict: if it fails it shows as **Not
+met** and goes to the questions for the team, not to the defects.
+
+**Closing a category on purpose.** An attack category that does not apply is closed with `@na:<category>` on
+the Feature and the reason in its description (`N/A http: handled by the server in front`). It shows as "not
+applicable" in the report instead of as a gap, so nobody writes a filler UAC to cover it.
 
 ### Where UACs come from
 
@@ -353,8 +404,8 @@ uac_sources ─► uac_draft_packet ─► (agent writes Gherkin) ─► uac_sav
 2. **Save.** The agent writes a `.feature` file (one `Scenario` per UAC) and saves it with `uac_save`, which
    validates it:
    - every scenario has a unique `@UAC-<n>` and `@e2e` (UI) and/or `@api` (HTTP);
-   - `@source:task`, `@source:code` or `@source:tests` says where it comes from, and `@ref:1.2` /
-     `@ref:PROJ-123` / `@ref:tests/test_cart.py::test_discount` links it to the original;
+   - what makes it required: `@source:task @ref:1.2`, `@source:code @ref:<file>:<line>` or
+     `@source:tests @ref:<file>::<test>`, or `@proposed` with a `Why:` line (see [Scope](#scope-only-what-this-component-is-responsible-for));
    - adversarial scenarios also carry `@break:<category>` (for example `@break:boundary @break:injection`);
    - the `Feature` carries `@task:<ref>` so the report can be traced back to the task.
 
@@ -390,7 +441,7 @@ Every draft packet includes the **attack surface** of the change and a determini
 | `injection` | SQL, XSS, template, command, path traversal, NoSQL, CRLF | treated as plain data, escaped, no 5xx |
 | `unicode` | emoji, RTL, zero-width, combining characters, NUL | kept intact or a 4xx; never corrupted |
 | `auth` | no/invalid token, another user's id (IDOR), role fields in the body | 401/403/404 and no foreign data |
-| `http` | MB-sized bodies, repeated params, unexpected methods, long URLs | 413/405/4xx, fast |
+| `http` | MB-sized bodies, repeated params, garbage headers, long URLs (only what the component parses itself) | 413/4xx, fast |
 | `concurrency` | the same request N times in parallel, double submit | applied once, consistent state |
 | `state` | steps out of order, deleted/expired things, resubmits | 4xx/409, state unchanged |
 | `resilience` (UI) | failed or slow network, server errors, offline, narrow screen | a visible error and a way to recover |
@@ -413,7 +464,9 @@ It needs no agent and no Playwright. Because it sends hostile input that may be 
 `--no-attacks` (`attacks=True/False` in MCP). `QA_REVIEW_API_TOKEN` is sent with every request.
 
 **Coverage.** `run.json` records the surface, the plan, which planned categories some `@break` UAC covers and
-which are still gaps; the gaps are listed in the report and in the next round's packet.
+which are still gaps; the gaps are listed in the report and in the next round's packet. A gap is covered only
+if it touches what the component owns; otherwise it is closed with `@na:<category>`. An intermediary gets its
+own plan (see [Scope](#scope-only-what-this-component-is-responsible-for)).
 
 ### UAC status and verdict
 
@@ -425,9 +478,11 @@ which are still gaps; the gaps are listed in the report and in the next round's 
 | Flaky | A test passed only after a retry |
 | Skipped | All its tests were skipped |
 | Not covered | No test carries its `[UAC-n]` |
+| Not met | A `@proposed` UAC failed: a question for the team, outside the verdict |
 
-Overall verdict: **ACCEPTED** if all pass and the battery found nothing; **NOT ACCEPTED** if any UAC fails or
-breaks, or the battery broke the system; **INCOMPLETE** if any is not covered, skipped or flaky. Tests that mention no UAC are listed separately as "tests without a criterion".
+Overall verdict (over the required UACs; proposals never change it): **ACCEPTED** if all pass and the battery
+found nothing; **NOT ACCEPTED** if any UAC fails or breaks, or the battery broke the system; **INCOMPLETE** if any
+is not covered, skipped or flaky. Tests that mention no UAC are listed separately as "tests without a criterion".
 
 ### The report
 
@@ -538,6 +593,10 @@ uac:
   language: en                    # language of the UACs and the report (en | es)
   attacks: local                  # automatic attack battery: local (local hosts only) | always | off
   attack_timeout_sec: 10          # per request of the battery
+  component:                      # what this component owns: UACs stay inside it
+    role: service                 # service | proxy | gateway | bff | frontend
+    owns: [discount rules]
+    delegates: {payment validation: payments-service}
 ```
 
 **Levels:**
@@ -750,6 +809,10 @@ Severities: `info`, `low`, `medium`, `high`, `critical`.
 | Battery: "not a local host" | It only attacks local hosts by default. Pass `--attacks` (only on an environment you can dirty) or set `uac.attacks: always` |
 | Battery: "is not reachable" | The app is not running at the host, or not answering `GET /` |
 | Battery: "connection refused" mid-run | An earlier attack killed the server: that request is the bug; restart the app and look at its log |
+| `uac_save`: "@source:code must point to the code…" | Add `@ref:<file>:<line>` with the code of this component that does it. If none does, it is not this component's behaviour: drop it or mark it `@proposed` with a `Why:` line |
+| `uac_save`: "@ref:1.4 is not a criterion of .kiro/specs/…" | The criterion does not exist in the spec: fix the reference or the UAC |
+| The packet says "This change calls other services" | Set `uac.component` in `.qa-review.yaml` (role, owns, delegates) |
+| A UAC shows "Not met" | A `@proposed` UAC failed: ask the team whether they want that behaviour; it does not change the verdict |
 | A UAC shows "Broken" | A `@break` test failed: the attack succeeded. Fix the code, not the test |
 | The draft packet lists no existing tests | No test file calls the endpoint paths literally (e.g. the URL is built dynamically) |
 | "no test found" for a file that does have tests | The test's name does not mention the module. Rename it or ignore the warning (it is warn, not block) |
