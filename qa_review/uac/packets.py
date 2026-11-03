@@ -196,7 +196,8 @@ is reported as NOT COVERED.
 - Evidence is collected automatically from what you attach. Import the helpers from `./evidence`:
   - `await shot(page, 'Then: total = 45 €')` after each Then that is visible on screen;
   - `await apiCall(request, 'POST', '/api/cart/discount', {{ amount: 5 }})` instead of calling `request`
-    directly: it records request and response in the report and returns the response.
+    directly: it records request and response in the report and returns the response. Pass a string to send
+    a raw body byte for byte (`'{{"amount": NaN}}'`, malformed JSON, form data) with the headers you choose.
   - `await note('text')` for anything else worth showing (ids created, values read).
 - Assert exactly what each Then says (status, body fields, visible texts). No assertion, no evidence.
 - Each test must be independent: create the data it needs (API calls, fixtures); do not rely on order.

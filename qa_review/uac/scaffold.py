@@ -53,10 +53,12 @@ export async function note(text: string): Promise<void> {
 
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
-/** An HTTP call that records request and response (secrets hidden) as evidence. */
+/** An HTTP call that records request and response (secrets hidden) as evidence. An object is sent as JSON; a
+ *  string is sent byte for byte (malformed JSON, NaN, form bodies), whatever the Content-Type says. */
 export async function apiCall(request: APIRequestContext, method: Method, url: string, data?: unknown,
                               options: { headers?: Record<string, string> } = {}): Promise<APIResponse> {
-  const res = await request.fetch(url, { method, data, headers: options.headers });
+  const payload = typeof data === 'string' ? Buffer.from(data) : data;   // Playwright would JSON-encode a string
+  const res = await request.fetch(url, { method, data: payload, headers: options.headers });
   const text = await res.text();
   let body: unknown = text;
   try { body = JSON.parse(text); } catch { /* not JSON: keep the text */ }
