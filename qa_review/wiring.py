@@ -74,7 +74,8 @@ When asked for acceptance criteria, UAT, "UACs" or an acceptance report for a ta
 2. Write the UACs in Gherkin following the packet's rules and save them with `uac_save`. Show them to the
    user before writing tests when they are present.
 3. `uac_tests_packet`, then write the Playwright tests it asks for (E2E with `page`, API with `request`),
-   using the evidence helpers.
+   using the evidence helpers. Always Playwright Test in TypeScript, even if the project tests with Karate,
+   JUnit, pytest or anything else: `uac_run` only runs Playwright.
 4. `uac_run` with the host to test (ask which one if it is not clear). Report the verdict per UAC and give the
    report path. A failing UAC is a finding, not something to hide: never weaken a test to make it pass.
 5. Prove AND break: besides functional UACs, write adversarial ones (`@break:<category>`) from the attack plan,
@@ -95,7 +96,7 @@ Before reporting a change as finished, use the `qa-review` MCP tools: `qa_run`, 
 `qa_review_packet`, review, `qa_submit_review`, then share `qa_report`. Do not claim done on a `block` verdict.
 
 For acceptance criteria, acceptance tests or "try to break it" requests, read `.kiro/steering/qa-master.md`
-first and follow it.
+first and follow it. UAC tests are always Playwright Test (TypeScript), whatever framework the project uses.
 """
 
 

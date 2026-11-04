@@ -488,3 +488,33 @@ def test_outbound_detection_is_per_language(repo):
     (repo / "nginx.conf").write_text("location /pay { proxy_pass http://payments; }\n")
     calls = {c["file"] for c in scope.outbound_calls(gitdiff.collect(repo))}
     assert calls == {"app/client.ts", "nginx.conf"}
+
+
+# ---------------------------------------------------------------- UAC tests are always Playwright
+KARATE = """Feature: payments
+
+  Scenario: a payment is forwarded
+    Given url baseUrl
+    And path '/api/payments'
+    And request { amount: 10 }
+    When method post
+    Then status 200
+"""
+
+
+def test_uac_tests_are_always_playwright(repo):
+    proxy_repo(repo)
+    karate = repo / "src" / "test" / "java" / "payments"
+    karate.mkdir(parents=True)
+    (karate / "payments.feature").write_text(KARATE)
+    text = api.draft_packet(repo, "kiro", "pay")
+    assert "`src/test/java/payments/payments.feature` → POST /api/payments: `a payment is forwarded`" in text
+    assert "still written with Playwright, whatever framework these use" in text
+    api.save(repo, "pay", scoped_feature(sc(1, "@UAC-1 @api @source:task @ref:1.1")))
+    tests = api.tests_packet(repo, "pay")
+    assert "**Playwright Test (TypeScript), always**" in tests and "Karate" in tests
+    (repo / "tests" / "uac" / "pay.feature").write_text(KARATE)          # the agent used Karate anyway
+    with pytest.raises(runner.UacRunError, match=r"found tests/uac/pay\.feature: UAC tests are always Playwright"):
+        api.run(repo, "pay", host="http://localhost:9")
+    from qa_review.wiring import QA_MASTER, SKILL, STEERING
+    assert "Never Karate" in QA_MASTER and "Karate" in SKILL and "always Playwright" in STEERING

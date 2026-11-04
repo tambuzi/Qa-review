@@ -166,7 +166,8 @@ def existing_section(root: Path, eps: list[dict]) -> list[str]:
         return []
     parts = ["## Existing tests of these endpoints (acceptance criteria already written)",
              ("Read them before drafting: each test that checks a business rule becomes a UAC with "
-              "`@source:tests @ref:<file>::<test>`; if one contradicts the task, flag it.")]
+              "`@source:tests @ref:<file>::<test>`; if one contradicts the task, flag it. They tell you WHAT to "
+              "check; the UAC tests are still written with Playwright, whatever framework these use.")]
     for h in hits:
         tests = ", ".join(f"`{t['name']}` (line {t['line']})" for t in h["tests"][:12])
         more = f" and {len(h['tests']) - 12} more" if len(h["tests"]) > 12 else ""
@@ -209,7 +210,13 @@ def _describe(f: dict) -> str:
 TESTS_RULES = """\
 ## How to write the tests
 
-Write `{spec_file}` with Playwright Test (TypeScript). One or more tests per UAC; every test title starts
+Write `{spec_file}` with **Playwright Test (TypeScript), always**: it is the only thing `uac_run` runs and
+reads evidence from. Do not use the project's own test framework (Karate, JUnit, RestAssured, pytest, Cypress,
+Postman/Newman, Jest...) even when the project already uses it: its existing tests are a source of criteria,
+not a template. If Node or `@playwright/test` are missing, tell the user how to add them
+(`npm i -D @playwright/test && npx playwright install chromium`) instead of switching framework.
+
+One or more tests per UAC; every test title starts
 with the UAC id in brackets, e.g. `test('[UAC-1] the discount is subtracted from the total', ...)`. A UAC with no test
 is reported as NOT COVERED. Test titles, `shot` labels and `note` texts appear in the report: write them in
 {language}, like the UACs.

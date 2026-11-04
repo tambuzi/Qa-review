@@ -141,6 +141,19 @@ def summarize(feature: gherkin.Feature, tests: list[dict]) -> tuple[list[dict], 
     return uacs, orphans, counts
 
 
+def missing_tests(root: Path, tests_dir: str, spec: str) -> str:
+    """Why there is nothing to run, naming tests written with another framework if that is what happened."""
+    d = Path(root) / tests_dir
+    other = sorted(str(p.relative_to(root)) for p in d.rglob("*") if p.is_file()
+                   and not p.name.endswith((".spec.ts", ".spec.js")) and p.name not in ("evidence.ts", "attacks.ts")
+                   ) if d.is_dir() else []
+    msg = f"no tests yet: write {spec} with Playwright Test (see uac_tests_packet)"
+    if other:
+        msg += ("; found " + ", ".join(other[:8]) + (" ..." if len(other) > 8 else "")
+                + ": UAC tests are always Playwright (.spec.ts), never Karate, JUnit, pytest or other frameworks")
+    return msg
+
+
 def coverage(uacs: list[dict], plan: list[dict], not_applicable: list[str] | None = None) -> dict:
     """Which categories of the attack plan have at least one @break UAC, which were closed on purpose (@na) and
     which are gaps."""
@@ -170,7 +183,7 @@ def run(root: Path, slug: str, host: str | None = None, allow_protected: bool = 
         raise UacRunError("fix the UACs first:\n- " + "\n- ".join(problems))
     spec = f"{st.tests_dir.strip('/')}/{slug}.spec.ts"
     if not (cfg.root / spec).exists():
-        raise UacRunError(f"no tests yet: write {spec} (see uac_tests_packet)")
+        raise UacRunError(missing_tests(cfg.root, st.tests_dir, spec))
     host = target.normalize(host or cfg.host) if (host or cfg.host) else None
     if not host:
         raise UacRunError("UAC tests need a host: pass --host / host (or set `host:` in .qa-review.yaml)")

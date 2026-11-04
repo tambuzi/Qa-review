@@ -529,6 +529,11 @@ protected host…).
 
 ### Requirements for this part
 
+UAC tests are **always Playwright Test (TypeScript)**, whatever framework the project uses (Karate, JUnit,
+pytest…): `uac_run` only runs `tests/uac/<slug>.spec.ts`, and the evidence comes from Playwright. The project's
+existing tests are read as a source of criteria, never as a template. If the agent writes them with another
+framework, `uac_run` refuses and names the files it found.
+
 - Node and `@playwright/test` in the project: `npm i -D @playwright/test && npx playwright install chromium`
   (or use your Chrome with `QA_REVIEW_BROWSER_CHANNEL=chrome`).
 - To record video of failures Playwright needs `ffmpeg` (`npx playwright install ffmpeg`); or turn it off with

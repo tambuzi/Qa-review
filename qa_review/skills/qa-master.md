@@ -29,6 +29,10 @@ is the judgment. Without the MCP tools the same steps exist as
 - Ask the user only when a wrong guess is expensive: which host, whether a remote environment may be attacked,
   or what a rule means when both readings are plausible and change many UACs. Otherwise take the most
   reasonable reading and state it.
+- UAC tests are always **Playwright Test in TypeScript** (`tests/uac/<slug>.spec.ts`): it is the only thing
+  `uac_run` runs and takes evidence from. Never Karate, JUnit, RestAssured, pytest, Cypress or Postman, even when
+  the project already tests with them: read those tests for criteria, do not copy their framework. If Playwright
+  is missing, ask the user to install it; do not switch framework.
 - Talk to the user in their language; the files follow `uac.language`.
 
 ## 1. Model before you test
@@ -91,7 +95,7 @@ them silently in either direction.
 
 ## 3. Write tests that can fail
 
-`uac_tests_packet` → `tests/uac/<slug>.spec.ts`.
+`uac_tests_packet` → `tests/uac/<slug>.spec.ts`, with Playwright Test (`request` for API, `page` for UI).
 
 - Mutate in your head: if the feature were broken in the most likely way, would this test go red? If not, it
   tests nothing.
